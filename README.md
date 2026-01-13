@@ -6,6 +6,8 @@ A low-latency wireless communication system for flight simulator cockpit periphe
 
 This project creates a wireless bridge between various flight simulator hardware peripherals and PC simulator software, eliminating cable clutter while maintaining the low latency required for responsive cockpit controls.
 
+![Star Network Topology](docs/images/ilustration.png)
+
 ```
 ┌─────────────────┐     USB CDC      ┌─────────────────┐
 │   PC Software   │◄────(SLIP)──────►│   Coordinator   │
