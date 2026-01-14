@@ -109,6 +109,15 @@ static QueueHandle_t g_rx_queue = nullptr;
 static uint8_t g_last_stick_report[HID_MAX_PKT];
 static size_t g_last_stick_len = 0;
 
+// Rate Limiting & Optimization Globals
+static PackedSidestickPayload g_last_sent_stick = {};
+static uint32_t g_last_stick_send_ms = 0;
+static const uint32_t STICK_RATE_LIMIT_MS = 20; // Max 50Hz
+static const uint16_t STICK_AXIS_DEADBAND = 8;  // For 12-bit quantization
+
+// Forward declaration
+static void send_sidestick_packed(const uint8_t* raw_data, size_t len);
+
 static portMUX_TYPE g_mcdu_lock = portMUX_INITIALIZER_UNLOCKED;
 static uint8_t g_mcdu_last_buttons[MCDU_BUTTON_BYTES];
 static QueueHandle_t g_mcdu_rx_queue = nullptr;
@@ -460,19 +469,73 @@ static void stick_in_cb(usb_transfer_t *t) {
     }
 
     if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes > 0) {
-        const uint8_t* data = t->data_buffer;
-        size_t len = t->actual_num_bytes;
-
-        bool changed = (len != g_last_stick_len) ||
-                       (memcmp(g_last_stick_report, data, len) != 0);
-        if (changed) {
-            memcpy(g_last_stick_report, data, len);
-            g_last_stick_len = len;
-            send_hid_input(DEV_TCA_SIDESTICK, data, len);
-        }
+        // Optimize: Convert to packed struct and apply rate limiting
+        send_sidestick_packed(t->data_buffer, t->actual_num_bytes);
     }
 
     usb_host_transfer_submit(t);
+}
+
+static void send_sidestick_packed(const uint8_t* data, size_t len) {
+    if (len < 8) return; // Minimum size check (TCA stick is usually larger)
+
+    // TCA Sidestick Mapping (Approximate based on analysis)
+    // Offset 1: X (16-bit, effective 14-bit)
+    // Offset 3: Y (16-bit, effective 14-bit)
+    // Offset 5: Twist (8-bit)
+    // Offset 6: Slider (8-bit) - Verify this
+    // Offset 7+ bits: Buttons/Hat
+    
+    // Extract Raw (Little Endian)
+    uint16_t raw_x = data[1] | (data[2] << 8);
+    uint16_t raw_y = data[3] | (data[4] << 8);
+    uint8_t raw_z = data[5];
+    uint8_t raw_slider = data[6]; // Assumption
+    
+    // Buttons (complex mapping, taking bytes 7-9 roughly)
+    uint32_t raw_buttons = data[7] | (data[8] << 8) | (data[9] << 16); // Mask later
+    
+    // Quantize to target resolution (12-bit for X/Y, 10-bit for Z/Slider)
+    // X/Y are 14-bit (0-16383), target 12-bit (0-4095) -> Shift Right 2
+    uint16_t q_x = raw_x >> 2;
+    uint16_t q_y = raw_y >> 2;
+    
+    // Z/Slider are 8-bit (0-255), target 10-bit (0-1023) -> Shift Left 2
+    uint16_t q_z = raw_z << 2; 
+    uint16_t q_slider = raw_slider << 2;
+    
+    // Extract Hat (Bits 0-3 of Byte 7 usually)
+    uint8_t hat = raw_buttons & 0x0F;
+    uint32_t buttons = (raw_buttons >> 4) & 0xFFFF; // Shift out hat
+
+    // Change Detection
+    bool changed = false;
+    if (abs((int)q_x - (int)g_last_sent_stick.axis_x) > STICK_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_y - (int)g_last_sent_stick.axis_y) > STICK_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_z - (int)g_last_sent_stick.axis_z) > STICK_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_slider - (int)g_last_sent_stick.axis_slider) > STICK_AXIS_DEADBAND) changed = true;
+    if (buttons != g_last_sent_stick.buttons) changed = true;
+    if (hat != g_last_sent_stick.hat_switch) changed = true;
+
+    uint32_t now = millis();
+    if (changed && (now - g_last_stick_send_ms >= STICK_RATE_LIMIT_MS)) {
+        PackedSidestickPayload payload;
+        payload.axis_x = q_x;
+        payload.axis_y = q_y;
+        payload.axis_z = q_z;
+        payload.axis_slider = q_slider;
+        payload.buttons = buttons;
+        payload.hat_switch = hat;
+
+        uint8_t msg_buffer[sizeof(MessageHeader) + sizeof(PackedSidestickPayload) + 1];
+        size_t msg_len = buildMessage(msg_buffer, MSG_HID_PACKED_SIDESTICK, g_node_id, 
+                                    NODE_COORDINATOR, &payload, sizeof(payload));
+        
+        esp_now_send(g_coordinator_mac, msg_buffer, msg_len);
+        
+        g_last_sent_stick = payload;
+        g_last_stick_send_ms = now;
+    }
 }
 
 static void mcdu_in_cb(usb_transfer_t *t) {

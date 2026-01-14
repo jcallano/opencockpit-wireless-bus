@@ -30,6 +30,8 @@ MSG_HEARTBEAT = 0x10
 MSG_HEARTBEAT_ACK = 0x11
 MSG_HID_INPUT = 0x20
 MSG_HID_OUTPUT = 0x21
+MSG_HID_PACKED_SIDESTICK = 0x25
+MSG_HID_PACKED_QUADRANT = 0x26
 MSG_SERIAL_DATA = 0x30
 MSG_MCDU_DISPLAY = 0x40
 MSG_MCDU_INPUT = 0x41
@@ -153,6 +155,12 @@ class BridgeApplication:
 
         elif msg_type == MSG_HID_INPUT:
             self.handle_hid_input(src, msg['payload'])
+            
+        elif msg_type == MSG_HID_PACKED_SIDESTICK:
+            self.handle_packed_sidestick(src, msg['payload'])
+            
+        elif msg_type == MSG_HID_PACKED_QUADRANT:
+            self.handle_packed_quadrant(src, msg['payload'])
 
         elif msg_type == MSG_SERIAL_DATA:
             self.handle_serial_data(src, msg['payload'])
@@ -186,6 +194,62 @@ class BridgeApplication:
         # TODO: Route to appropriate device handler
         # - Joystick handler for Thrustmaster
         # - Send to vJoy or simulator
+
+    def handle_packed_sidestick(self, src: int, payload: bytes):
+        """Handle optimized bit-packed sidestick report."""
+        if len(payload) != 8:
+            return
+            
+        # Unpack 64-bit integer
+        val = int.from_bytes(payload, byteorder='little')
+        
+        # Bitfield extraction (Little Endian packing order assumptions)
+        # axis_x : 12    (0-11)
+        # axis_y : 12    (12-23)
+        # axis_z : 10    (24-33)
+        # slider : 10    (34-43)
+        # buttons : 16   (44-59)
+        # hat : 4        (60-63)
+        
+        axis_x = val & 0xFFF
+        axis_y = (val >> 12) & 0xFFF
+        axis_z = (val >> 24) & 0x3FF
+        slider = (val >> 34) & 0x3FF
+        buttons = (val >> 44) & 0xFFFF
+        hat = (val >> 60) & 0xF
+        
+        # Scale back to 16-bit for logging/vJoy if needed
+        # (Simply shifting back, lose precision but regain range)
+        raw_x = axis_x << 4  # 12->16
+        raw_y = axis_y << 4
+        
+        logger.debug(f"PACKED STICK node {src}: X={axis_x} Y={axis_y} Z={axis_z} S={slider} Btns={buttons:016b} Hat={hat}")
+
+    def handle_packed_quadrant(self, src: int, payload: bytes):
+        """Handle optimized bit-packed quadrant report."""
+        if len(payload) < 16:
+            return
+            
+        # First 8 bytes: Axes
+        axes_val = int.from_bytes(payload[0:8], byteorder='little')
+        
+        # Next 8 bytes: Buttons
+        buttons_val = int.from_bytes(payload[8:16], byteorder='little')
+        
+        # Axes Packing:
+        # T1 : 12
+        # T2 : 12
+        # Ax3 : 10
+        # Ax4 : 10
+        # Ax5 : 10
+        # Ax6 : 10
+        
+        t1 = axes_val & 0xFFF
+        t2 = (axes_val >> 12) & 0xFFF
+        ax3 = (axes_val >> 24) & 0x3FF
+        ax4 = (axes_val >> 34) & 0x3FF
+        
+        logger.debug(f"PACKED QUAD node {src}: T1={t1} T2={t2} Ax3={ax3} Ax4={ax4} Btns={buttons_val:016X}")
 
     def handle_serial_data(self, src: int, payload: bytes):
         """Handle serial data from a peripheral node (e.g., MiniFCU)."""

@@ -186,9 +186,9 @@ PC Software                Node A                    Peripheral Nodes
 | WiFi | 802.11 b/g/n (2.4GHz) - Forced to 11g/n for low latency |
 | USB | Native USB OTG supporting Host and Device modes |
 | SRAM | 512KB |
-| PSRAM | 8MB (board dependent) |
+| PSRAM | 8MB (Required for WeAct/Peripherals) |
 | Flash | 4MB-16MB (board dependent) |
-| Development Board | WeAct ESP32-S3 Dev Board Rev A (or compatible) |
+| Development Board | See Node specifications below |
 
 ### 3.2 Node Hardware Configuration
 
@@ -196,8 +196,8 @@ PC Software                Node A                    Peripheral Nodes
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    ESP32-S3 DevKit                      │
-│                                                         │
+│              Espressif ESP32-S3-USB-OTG                 │
+│                 (Recommended Board)                     │
 │  USB-C ────► USB Device Mode                            │
 │              └── CDC Serial (SLIP Protocol)             │
 │                  ├── Receives requests from PC          │
@@ -221,7 +221,7 @@ PC Software                Node A                    Peripheral Nodes
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    ESP32-S3 DevKit                      │
+│             WeAct Studio ESP32-S3 (or similar)          │
 │                                                         │
 │  USB-A Host ────► USB Hub (if needed)                   │
 │                   ├── Thrustmaster TCA Sidestick        │
@@ -240,7 +240,7 @@ PC Software                Node A                    Peripheral Nodes
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│                    ESP32-S3 DevKit                      │
+│             WeAct Studio ESP32-S3 (or similar)          │
 │                                                         │
 │  USB-A Host ────► Thrustmaster TCA Quadrant             │
 │                   VID: 0x044F  PID: 0x0407              │
@@ -357,6 +357,26 @@ void initEspNow() {
 | Encryption | Disabled (for minimum latency) |
 | Retries | ESP-NOW default (hardware managed) |
 | Data Rate | 6Mbps minimum (OFDM) |
+
+### 5.4 Traffic Reduction Strategy (Implemented v1.2)
+
+To minimize channel congestion and latency, the following strategies are applied to HID peripheral nodes:
+
+#### 5.4.1 Change-Based Transmission
+Nodes maintain the state of the last transmitted report. A new message is only sent if:
+1. **Buttons Change:** Immediate transmission on any button state change.
+2. **Axis Movement:** Axis value changes by more than the defined `DEADBAND`.
+3. **Heartbeat:** Periodic transmission (e.g., 1000ms) to maintain connection if idle.
+
+#### 5.4.2 Rate Limiting
+- **Maximum Rate:** 50Hz (20ms interval)
+- **Rationale:** Simulator physics typically update at <100Hz. 50Hz provides a smooth response while reducing potential packet collisions by 50-70% compared to raw 125Hz polling.
+
+#### 5.4.3 Quantization and Compaction
+- **Quantization:** 16-bit raw ADC values are downsampled to 10-bit or 12-bit.
+  - *Primary Axes (X/Y)*: 12-bit (0-4095)
+  - *Secondary Axes (Throttle/Twist)*: 10-bit (0-1023)
+- **Bit-Packing:** Data is packed into tight C-structs using bitfields, reducing payload size by >75%.
 
 ---
 
@@ -719,8 +739,10 @@ Reference: `OpenCockpit_MiniFCU_Comm_Protocol` repository
 | 0x04 | REGISTER_ACK | Node → Coord | Registration confirmed |
 | 0x10 | HEARTBEAT | Bidirectional | Keep-alive ping |
 | 0x11 | HEARTBEAT_ACK | Bidirectional | Keep-alive response |
-| 0x20 | HID_INPUT | Node → Coord | HID input report (joystick, buttons) |
+| 0x20 | HID_INPUT | Node → Coord | Legacy HID input report (raw) |
 | 0x21 | HID_OUTPUT | Coord → Node | HID output report (LEDs, display) |
+| 0x25 | HID_PACKED_SIDESTICK | Node → Coord | Optimized Sidestick Payload (8 bytes) |
+| 0x26 | HID_PACKED_QUADRANT | Node → Coord | Optimized Quadrant Payload (16 bytes) |
 | 0x30 | SERIAL_DATA | Bidirectional | Serial passthrough data |
 | 0x40 | MCDU_DISPLAY | Coord → Node | MCDU display update |
 | 0x41 | MCDU_INPUT | Node → Coord | MCDU button press |
@@ -804,6 +826,45 @@ struct MCDUDisplayMessage {
     uint8_t length;             // Text length
     uint8_t text[24];           // Text data
 };
+
+#### 8.5.6 Packed Sidestick Payload (0x25)
+
+**Size:** 8 bytes (Optimized from 64 bytes)
+
+```cpp
+struct PackedSidestickPayload {
+    // Axes
+    uint16_t axis_x : 12;       // 0-4095
+    uint16_t axis_y : 12;       // 0-4095
+    uint16_t axis_z : 10;       // Twist 0-1023
+    uint16_t axis_slider : 10;  // Throttle 0-1023
+    
+    // Buttons
+    uint32_t buttons : 16;      // 16 buttons
+    uint32_t hat_switch : 4;    // 8-way POV
+};
+```
+
+#### 8.5.7 Packed Quadrant Payload (0x26)
+
+**Size:** 16 bytes (Optimized from 64 bytes)
+
+```cpp
+struct PackedQuadrantPayload {
+    // Main Throttles (12-bit)
+    uint16_t throttle_left : 12;
+    uint16_t throttle_right : 12;
+    
+    // Addon Axes (Speedbrake, Flaps, etc - 10-bit)
+    uint16_t axis_3 : 10;
+    uint16_t axis_4 : 10;
+    uint16_t axis_5 : 10;
+    uint16_t axis_6 : 10;
+    
+    // Buttons (64 buttons to cover main unit + addons)
+    uint64_t buttons;
+};
+```
 ```
 
 ### 8.6 Flow Control
@@ -1334,6 +1395,7 @@ upload_speed = 921600
 |---------|------|---------|
 | 1.0 | January 2026 | Initial specification |
 | 1.1 | January 2026 | Replaced composite HID device with SLIP-based serial protocol for simplified architecture |
+| 1.2 | January 2026 | Added Traffic Reduction Strategy (Quantization, Bit-packing, Rate Limiting) |
 
 ---
 

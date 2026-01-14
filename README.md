@@ -44,6 +44,11 @@ This project creates a wireless bridge between various flight simulator hardware
 | Thrustmaster TCA Quadrant | Throttle | Documented |
 | WinWing MCDU | CDU Display | Documented |
 
+### Board Compatibility
+- **Coordinator (Node A):** [Espressif ESP32-S3-USB-OTG](https://docs.espressif.com/projects/esp-iot-solution/en/latest/hw-reference/ESP32-S3-USB-OTG.html) (Recommended for LCD/Power control)
+- **Peripherals (Node B/C):** [WeAct Studio ESP32-S3](https://github.com/WeActStudio/WeActStudio.ESP32C3-CoreBoard) (8MB Flash/8MB PSRAM) or generic equivalent.
+> See [Hardware Compatibility Report](docs/hardware/hardware_compatibility_report.md) for details.
+
 ## Project Structure
 
 ```
@@ -79,10 +84,15 @@ opencockpit-wireless-bus/
 
 ### Building Firmware
 
-1. Install ESP32 board support in Arduino IDE
-2. Open the appropriate sketch from `firmware/`
-3. Configure MAC addresses for your nodes
-4. Flash to ESP32-S3
+This project supports multiple board types via compile-time flags.
+
+1.  **Install dependencies**: Arduino IDE + ESP32 Core 3.3.5+.
+2.  **Select Board & Compile**:
+    *   **Coordinator:** Use definition `BOARD_ESPRESSIF_USB_OTG`.
+    *   **Peripherals:** Use definition `BOARD_WEACT_STUDIO_S3`.
+3.  **Flash**:
+    *   `arduino-cli` environment files (`arduino-cli.env`) are provided in each firmware directory with the correct flags pre-configured.
+    *   See [LCD Configuration](docs/hardware/lcd_config.md) if using a display on the Coordinator.
 
 ### Running PC Software
 

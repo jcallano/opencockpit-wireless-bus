@@ -110,6 +110,15 @@ static size_t g_serial_out_tail = 0;
 // -----------------------------
 static uint8_t g_last_quadrant_report[HID_MAX_PKT];
 static size_t g_last_quadrant_len = 0;
+
+// Optimization Globals
+static PackedQuadrantPayload g_last_sent_quadrant = {};
+static uint32_t g_last_quadrant_send_ms = 0;
+static const uint32_t QUADRANT_RATE_LIMIT_MS = 20; // 50Hz
+static const uint16_t QUADRANT_AXIS_DEADBAND = 8;
+
+// Forward declaration
+static void send_quadrant_packed(const uint8_t* raw_data, size_t len);
 static uint32_t g_last_quadrant_log_ms = 0;
 static uint32_t g_last_ch340_log_ms = 0;
 static uint32_t g_last_ch340_tx_log_ms = 0;
@@ -523,25 +532,76 @@ static void hid_in_cb(usb_transfer_t *t) {
     }
 
     if (t->status == USB_TRANSFER_STATUS_COMPLETED && t->actual_num_bytes > 0) {
-        const uint8_t* data = t->data_buffer;
-        size_t len = t->actual_num_bytes;
-
-        bool changed = (len != g_last_quadrant_len) ||
-                       (memcmp(g_last_quadrant_report, data, len) != 0);
-        if (changed) {
-            memcpy(g_last_quadrant_report, data, len);
-            g_last_quadrant_len = len;
-            uint32_t now = millis();
-            if (now - g_last_quadrant_log_ms > 50) {
-                g_last_quadrant_log_ms = now;
-                log_quadrant_report(data, len);
-                log_hex_bytes("Quadrant HID", data, static_cast<int>(len), 16);
-            }
-            send_hid_input(data, len);
-        }
+        send_quadrant_packed(t->data_buffer, t->actual_num_bytes);
     }
 
     usb_host_transfer_submit(t);
+}
+
+static void send_quadrant_packed(const uint8_t* data, size_t len) {
+    if (len < 16) return; // Quadrant report is usually large
+
+    // Offsets based on node_c.ino log function:
+    // T1: 3-4, T2: 5-6, Flaps: 7-8, Spd: 10-11
+    
+    // Extract Raw
+    uint16_t t1 = data[3] | (data[4] << 8);
+    uint16_t t2 = data[5] | (data[6] << 8);
+    uint16_t ax3 = data[7] | (data[8] << 8);   // Flaps
+    uint16_t ax4 = data[10] | (data[11] << 8); // Speedbrake?
+    
+    // Quantize 16-bit -> 12/10 bit
+    uint16_t q_t1 = t1 >> 2; // 14-bit to 12
+    uint16_t q_t2 = t2 >> 2;
+    uint16_t q_ax3 = ax3 >> 4; // 14-bit to 10
+    uint16_t q_ax4 = ax4 >> 4;
+
+    // Buttons: Collect all other bytes into 64-bit map
+    // Bytes 1, 2, 9, 12, 13, 14...
+    // Simplification: Map raw bytes to uint64
+    uint64_t buttons = 0;
+    // This is a naive pack, but unique enough to detect state changes
+    // We map bytes 1,2,9,12,13,14,15,16 into the 64-bit integer
+    size_t btn_idx = 0;
+    uint8_t btn_bytes[] = {1, 2, 9, 12, 13, 14, 15, 16};
+    
+    for (uint8_t off : btn_bytes) {
+        if (off < len) {
+            buttons |= (static_cast<uint64_t>(data[off]) << (btn_idx * 8));
+            btn_idx++;
+        }
+    }
+
+    // Change Detect
+    bool changed = false;
+    if (abs((int)q_t1 - (int)g_last_sent_quadrant.throttle_left) > QUADRANT_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_t2 - (int)g_last_sent_quadrant.throttle_right) > QUADRANT_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_ax3 - (int)g_last_sent_quadrant.axis_3) > QUADRANT_AXIS_DEADBAND) changed = true;
+    if (abs((int)q_ax4 - (int)g_last_sent_quadrant.axis_4) > QUADRANT_AXIS_DEADBAND) changed = true;
+    if (buttons != g_last_sent_quadrant.buttons) changed = true;
+
+    uint32_t now = millis();
+    if (changed && (now - g_last_quadrant_send_ms >= QUADRANT_RATE_LIMIT_MS)) {
+        PackedQuadrantPayload payload = {};
+        payload.throttle_left = q_t1;
+        payload.throttle_right = q_t2;
+        payload.axis_3 = q_ax3;
+        payload.axis_4 = q_ax4;
+        payload.buttons = buttons;
+
+        uint8_t buffer[MAX_ESPNOW_PAYLOAD];
+        size_t msg_len = buildMessage(buffer, MSG_HID_PACKED_QUADRANT, g_node_id,
+                                      NODE_COORDINATOR, &payload, sizeof(payload));
+        esp_now_send(g_coordinator_mac, buffer, msg_len);
+        
+        g_last_sent_quadrant = payload;
+        g_last_quadrant_send_ms = now;
+        
+        // Log locally if debug
+        #if DEBUG_LOGS
+        // log_quadrant_report(data, len);
+        #endif
+    }
 }
 
 static void ch340_in_cb(usb_transfer_t *t) {

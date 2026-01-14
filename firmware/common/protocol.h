@@ -24,6 +24,8 @@ enum MessageType : uint8_t {
     MSG_HEARTBEAT_ACK   = 0x11,
     MSG_HID_INPUT       = 0x20,
     MSG_HID_OUTPUT      = 0x21,
+    MSG_HID_PACKED_SIDESTICK = 0x25,
+    MSG_HID_PACKED_QUADRANT  = 0x26,
     MSG_SERIAL_DATA     = 0x30,
     MSG_MCDU_DISPLAY    = 0x40,
     MSG_MCDU_INPUT      = 0x41,
@@ -31,6 +33,45 @@ enum MessageType : uint8_t {
     MSG_TEST_RSP        = 0xE1,
     MSG_ERROR           = 0xF0,
     MSG_RESET           = 0xFF
+};
+
+// ... [Node Enums] ...
+
+// Packed Sidestick Payload (Optimized for TCA Sidestick)
+// Total size: 8 bytes
+struct PackedSidestickPayload {
+    // Axes (12-bit X/Y, 10-bit Twist/Throttle)
+    uint16_t axis_x : 12;       // 0-4095
+    uint16_t axis_y : 12;       // 0-4095
+    uint16_t axis_z : 10;       // Twist 0-1023
+    uint16_t axis_slider : 10;  // Throttle 0-1023
+    
+    // Buttons & Hat
+    uint32_t buttons : 16;      // 16 buttons
+    uint32_t hat_switch : 4;    // 8-way POV
+};
+
+// Packed Quadrant Payload (Optimized for TCA Quadrant + Addons)
+// Total size: 16 bytes
+struct PackedQuadrantPayload {
+    // Main Throttles (12-bit)
+    uint16_t throttle_left : 12;
+    uint16_t throttle_right : 12;
+    
+    // Addon Axes (Speedbrake, Flaps, etc - 10-bit)
+    uint16_t axis_3 : 10;
+    uint16_t axis_4 : 10;
+    uint16_t axis_5 : 10;
+    uint16_t axis_6 : 10;
+    
+    // Buttons (64 buttons to cover main unit + addons)
+    uint64_t buttons;
+};
+
+// Heartbeat payload
+struct HeartbeatPayload {
+    uint32_t timestamp_ms;          // Sender's millis()
+    uint8_t status;                 // Node status flags
 };
 
 // Node Identifiers
@@ -160,11 +201,7 @@ struct ErrorPayload {
     uint8_t error_data[4];
 };
 
-// Heartbeat payload
-struct HeartbeatPayload {
-    uint32_t timestamp_ms;          // Sender's millis()
-    uint8_t status;                 // Node status flags
-};
+
 
 // Test message payload (echoed back by node)
 struct TestPayload {
