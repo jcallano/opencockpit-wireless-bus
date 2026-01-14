@@ -10,12 +10,8 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include "USB.h"
-
-// Compatibility for ESP32-S3 Arduino Core v3.x
-#if !defined(USBSerial)
-#define USBSerial Serial
-#endif
-
+#include "USBCDC.h"
+USBCDC SlipCDC;
 
 struct NullSerial {
     template <typename... Args>
@@ -33,6 +29,7 @@ static NullSerial NullSerialInstance;
 #endif
 
 #if SLIP_USE_CDC
+// FORCE Debug to Serial0 (UART) if SLIP uses CDC
 #define ESPNOW_LOG_SERIAL Serial0
 #else
 #define ESPNOW_LOG_SERIAL Serial
@@ -42,7 +39,7 @@ static NullSerial NullSerialInstance;
 #include "include/espnow_coordinator.h"
 
 // ------------------------------------------------------------
-// Forward declarations (PlatformIO build uses C++ compilation)
+// Forward declarations
 // ------------------------------------------------------------
 static void process_slip_rx();
 static void send_to_pc(uint8_t msg_type, uint8_t src_node, const void* payload, size_t payload_len);
@@ -61,25 +58,33 @@ static bool slip_send_frame(const uint8_t* data, size_t len);
 #include "../common/hardware_config.h"
 
 // ------------------------------------------------------------
-// Board Pins (Defined in hardware_config.h)
+// LCD parameters (ST7789, 240x240) - Adafruit GFX
 // ------------------------------------------------------------
-// Using BOARD_ESPRESSIF_USB_OTG definitions
-// LCD pins, Buttons, LEDs are now macros.
+// BitOrder Fix for ESP32 Core v3 + BusIO
+#if defined(ESP32) && (ARDUINO_ESP32_MAJOR >= 3)
+  #ifndef BitOrder
+    typedef uint8_t BitOrder;
+  #endif
+#endif
 
-// ------------------------------------------------------------
-// LCD parameters (ST7789, 240x240)
-// ------------------------------------------------------------
+#include <Adafruit_GFX.h>
+#include <Adafruit_ST7789.h>
+
 #define LCD_WIDTH           240
 #define LCD_HEIGHT          240
 
-#define COLOR_BLACK         0x0000
-#define COLOR_WHITE         0xFFFF
-#define COLOR_GREEN         0x07E0
-#define COLOR_CYAN          0x07FF
-#define COLOR_YELLOW        0xFFE0
+// Colors
+#define COLOR_BLACK         ST77XX_BLACK
+#define COLOR_WHITE         ST77XX_WHITE
+#define COLOR_GREEN         ST77XX_GREEN
+#define COLOR_CYAN          ST77XX_CYAN
+#define COLOR_YELLOW        ST77XX_YELLOW
+#define COLOR_RED           ST77XX_RED
+#define COLOR_BLUE          ST77XX_BLUE
 
-static SPIClass lcd_spi(SPI);
-static SPISettings lcd_spi_settings(10000000, MSBFIRST, SPI_MODE0);
+// Initialize with SPI pins
+// Adafruit_ST7789(SPIClass *spiClass, int8_t cs, int8_t dc, int8_t rst);
+Adafruit_ST7789 tft = Adafruit_ST7789(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST);
 
 // ------------------------------------------------------------
 // SLIP transport
@@ -117,185 +122,73 @@ static uint8_t g_latency_target_node = NODE_BROADCAST;
 #define TEST_PING_TIMEOUT_MS 250
 
 // ------------------------------------------------------------
-// Font (5x7)
+// LCD functions (Wrapped to GFX)
 // ------------------------------------------------------------
-static const uint8_t kFont5x7[] = {
-    0x00,0x00,0x00,0x00,0x00, 0x00,0x00,0x5F,0x00,0x00, 0x00,0x07,0x00,0x07,0x00,
-    0x14,0x7F,0x14,0x7F,0x14, 0x24,0x2A,0x7F,0x2A,0x12, 0x23,0x13,0x08,0x64,0x62,
-    0x36,0x49,0x55,0x22,0x50, 0x00,0x05,0x03,0x00,0x00, 0x00,0x1C,0x22,0x41,0x00,
-    0x00,0x41,0x22,0x1C,0x00, 0x14,0x08,0x3E,0x08,0x14, 0x08,0x08,0x3E,0x08,0x08,
-    0x00,0x50,0x30,0x00,0x00, 0x08,0x08,0x08,0x08,0x08, 0x00,0x60,0x60,0x00,0x00,
-    0x20,0x10,0x08,0x04,0x02, 0x3E,0x51,0x49,0x45,0x3E, 0x00,0x42,0x7F,0x40,0x00,
-    0x42,0x61,0x51,0x49,0x46, 0x21,0x41,0x45,0x4B,0x31, 0x18,0x14,0x12,0x7F,0x10,
-    0x27,0x45,0x45,0x45,0x39, 0x3C,0x4A,0x49,0x49,0x30, 0x01,0x71,0x09,0x05,0x03,
-    0x36,0x49,0x49,0x49,0x36, 0x06,0x49,0x49,0x29,0x1E, 0x00,0x36,0x36,0x00,0x00,
-    0x00,0x56,0x36,0x00,0x00, 0x08,0x14,0x22,0x41,0x00, 0x14,0x14,0x14,0x14,0x14,
-    0x00,0x41,0x22,0x14,0x08, 0x02,0x01,0x51,0x09,0x06, 0x32,0x49,0x79,0x41,0x3E,
-    0x7E,0x11,0x11,0x11,0x7E, 0x7F,0x49,0x49,0x49,0x36, 0x3E,0x41,0x41,0x41,0x22,
-    0x7F,0x41,0x41,0x22,0x1C, 0x7F,0x49,0x49,0x49,0x41, 0x7F,0x09,0x09,0x09,0x01,
-    0x3E,0x41,0x49,0x49,0x7A, 0x7F,0x08,0x08,0x08,0x7F, 0x00,0x41,0x7F,0x41,0x00,
-    0x20,0x40,0x41,0x3F,0x01, 0x7F,0x08,0x14,0x22,0x41, 0x7F,0x40,0x40,0x40,0x40,
-    0x7F,0x02,0x0C,0x02,0x7F, 0x7F,0x04,0x08,0x10,0x7F, 0x3E,0x41,0x41,0x41,0x3E,
-    0x7F,0x09,0x09,0x09,0x06, 0x3E,0x41,0x51,0x21,0x5E, 0x7F,0x09,0x19,0x29,0x46,
-    0x46,0x49,0x49,0x49,0x31, 0x01,0x01,0x7F,0x01,0x01, 0x3F,0x40,0x40,0x40,0x3F,
-    0x1F,0x20,0x40,0x20,0x1F, 0x3F,0x40,0x38,0x40,0x3F, 0x63,0x14,0x08,0x14,0x63,
-    0x07,0x08,0x70,0x08,0x07, 0x61,0x51,0x49,0x45,0x43, 0x00,0x7F,0x41,0x41,0x00,
-    0x02,0x04,0x08,0x10,0x20, 0x00,0x41,0x41,0x7F,0x00, 0x04,0x02,0x01,0x02,0x04,
-    0x40,0x40,0x40,0x40,0x40, 0x00,0x01,0x02,0x04,0x00, 0x20,0x54,0x54,0x54,0x78,
-    0x7F,0x48,0x44,0x44,0x38, 0x38,0x44,0x44,0x44,0x20, 0x38,0x44,0x44,0x48,0x7F,
-    0x38,0x54,0x54,0x54,0x18, 0x08,0x7E,0x09,0x01,0x02, 0x08,0x14,0x54,0x54,0x3C,
-    0x7F,0x08,0x04,0x04,0x78, 0x00,0x44,0x7D,0x40,0x00, 0x20,0x40,0x44,0x3D,0x00,
-    0x7F,0x10,0x28,0x44,0x00, 0x00,0x41,0x7F,0x40,0x00, 0x7C,0x04,0x18,0x04,0x78,
-    0x7C,0x08,0x04,0x04,0x78, 0x38,0x44,0x44,0x44,0x38, 0x7C,0x14,0x14,0x14,0x08,
-    0x08,0x14,0x14,0x18,0x7C, 0x7C,0x08,0x04,0x04,0x08, 0x48,0x54,0x54,0x54,0x20,
-    0x04,0x3F,0x44,0x40,0x20, 0x3C,0x40,0x40,0x20,0x7C, 0x1C,0x20,0x40,0x20,0x1C,
-    0x3C,0x40,0x30,0x40,0x3C, 0x44,0x28,0x10,0x28,0x44, 0x0C,0x50,0x50,0x50,0x3C,
-    0x44,0x64,0x54,0x4C,0x44, 0x00,0x08,0x36,0x41,0x00, 0x00,0x00,0x7F,0x00,0x00,
-    0x00,0x41,0x36,0x08,0x00, 0x08,0x08,0x2A,0x1C,0x08, 0x08,0x1C,0x2A,0x08,0x08
-};
+static void lcd_init() {
+    setupHardware();
+    
+    // SPI Init with explicit pins
+    // SPI.begin(SCK, MISO, MOSI, SS);
+    SPI.begin(PIN_LCD_CLK, -1, PIN_LCD_MOSI, PIN_LCD_CS);
+    
+    // Backlight - Explicitly ON
+    pinMode(PIN_LCD_BL, OUTPUT);
+    digitalWrite(PIN_LCD_BL, HIGH);
 
-// ------------------------------------------------------------
-// LCD helpers
-// ------------------------------------------------------------
-static void lcd_write_cmd(uint8_t cmd) {
-    digitalWrite(PIN_LCD_BL, LOW); // Added this line as per instruction
-    digitalWrite(PIN_LCD_DC, LOW);
-    lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(PIN_LCD_EN, LOW);
-    lcd_spi.write(cmd);
-    digitalWrite(PIN_LCD_EN, HIGH);
-    lcd_spi.endTransaction();
-}
-
-static void lcd_write_data(const uint8_t* data, size_t len) {
-    digitalWrite(PIN_LCD_DC, HIGH);
-    lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(PIN_LCD_EN, LOW);
-    lcd_spi.writeBytes(data, len);
-    digitalWrite(PIN_LCD_EN, HIGH);
-    lcd_spi.endTransaction();
-}
-
-static void lcd_write_data8(uint8_t data) {
-    lcd_write_data(&data, 1);
-}
-
-static void lcd_write_data16(uint16_t data) {
-    uint8_t buf[2] = {static_cast<uint8_t>(data >> 8), static_cast<uint8_t>(data & 0xFF)};
-    lcd_write_data(buf, sizeof(buf));
-}
-
-static void lcd_set_window(uint16_t x0, uint16_t y0, uint16_t x1, uint16_t y1) {
-    lcd_write_cmd(0x2A);
-    lcd_write_data16(x0);
-    lcd_write_data16(x1);
-    lcd_write_cmd(0x2B);
-    lcd_write_data16(y0);
-    lcd_write_data16(y1);
-    lcd_write_cmd(0x2C);
-}
-
-static void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
-    if (x >= LCD_WIDTH || y >= LCD_HEIGHT) return;
-    if (x + w > LCD_WIDTH) w = LCD_WIDTH - x;
-    if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
-
-    lcd_set_window(x, y, x + w - 1, y + h - 1);
-    digitalWrite(PIN_LCD_DC, HIGH);
-    lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(PIN_LCD_EN, LOW);
-    for (uint32_t i = 0; i < static_cast<uint32_t>(w) * h; i++) {
-        lcd_spi.write16(color);
-    }
-    digitalWrite(PIN_LCD_EN, HIGH);
-    lcd_spi.endTransaction();
+    // GFX Init
+    tft.init(240, 240);
+    tft.setRotation(2); // 180 degree rotation often fits USB-OTG board
+    tft.fillScreen(COLOR_BLACK);
+    
+    // Startup Test
+    tft.fillScreen(COLOR_RED);
+    delay(500);
+    tft.fillScreen(COLOR_GREEN);
+    delay(500);
+    tft.fillScreen(COLOR_BLACK);
+    
+    tft.setTextColor(COLOR_WHITE);
+    tft.setTextSize(2);
+    tft.setCursor(10, 100);
+    tft.print("OC WIRELESS");
 }
 
 static void lcd_fill_screen(uint16_t color) {
-    lcd_fill_rect(0, 0, LCD_WIDTH, LCD_HEIGHT, color);
-}
-
-static void lcd_draw_char(uint16_t x, uint16_t y, char c, uint16_t color, uint16_t bg, uint8_t scale) {
-    if (c < 0x20 || c > 0x7E) c = '?';
-    uint16_t idx = (c - 0x20) * 5;
-
-    for (uint8_t col = 0; col < 5; col++) {
-        uint8_t line = kFont5x7[idx + col];
-        for (uint8_t row = 0; row < 7; row++) {
-            uint16_t px = x + col * scale;
-            uint16_t py = y + row * scale;
-            uint16_t draw_color = (line & 0x01) ? color : bg;
-            if (scale == 1) {
-                lcd_fill_rect(px, py, 1, 1, draw_color);
-            } else {
-                lcd_fill_rect(px, py, scale, scale, draw_color);
-            }
-            line >>= 1;
-        }
-    }
+    tft.fillScreen(color);
 }
 
 static void lcd_draw_text(uint16_t x, uint16_t y, const char* text, uint16_t color, uint16_t bg, uint8_t scale) {
-    while (*text) {
-        lcd_draw_char(x, y, *text, color, bg, scale);
-        x += 6 * scale;
-        text++;
-    }
+    tft.setCursor(x, y);
+    tft.setTextColor(color, bg);
+    tft.setTextSize(scale);
+    tft.print(text);
+}
+
+static void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16_t color) {
+    tft.fillRect(x, y, w, h, color);
 }
 
 static void lcd_update_line(uint8_t index, const char* text, uint16_t color) {
-    static char last_lines[8][32] = {};
-    static const uint16_t kLineHeight = 20;
-    static const uint16_t kStartY = 35;
+     static char last_lines[8][32] = {};
+     static const uint16_t kLineHeight = 20;
+     static const uint16_t kStartY = 35;
 
-    if (index >= 8) {
-        return;
-    }
+     if (index >= 8) return;
 
-    if (strncmp(last_lines[index], text, sizeof(last_lines[index]) - 1) == 0) {
-        return;
-    }
+     if (strncmp(last_lines[index], text, sizeof(last_lines[index]) - 1) == 0) {
+         return;
+     }
 
-    uint16_t y = kStartY + index * kLineHeight;
-    lcd_fill_rect(0, y, LCD_WIDTH, kLineHeight, COLOR_BLACK);
-    lcd_draw_text(10, y, text, color, COLOR_BLACK, 2);
-    strncpy(last_lines[index], text, sizeof(last_lines[index]) - 1);
-    last_lines[index][sizeof(last_lines[index]) - 1] = '\0';
-}
+     uint16_t y = kStartY + index * kLineHeight;
+     tft.fillRect(0, y, LCD_WIDTH, kLineHeight, COLOR_BLACK);
+     
+     tft.setCursor(10, y);
+     tft.setTextColor(color);
+     tft.setTextSize(2);
+     tft.print(text);
 
-static void lcd_init() {
-    setupHardware();
-
-    lcd_spi.begin(PIN_LCD_CLK, -1, PIN_LCD_MOSI, -1);
-
-    // Reset LCD
-    digitalWrite(PIN_LCD_RST, LOW);
-    delay(100);
-    digitalWrite(PIN_LCD_RST, HIGH);
-    delay(100);
-
-    lcd_write_cmd(0x01); // SWRESET
-    delay(150);
-    lcd_write_cmd(0x11); // SLPOUT
-    delay(120);
-    lcd_write_cmd(0x3A); // COLMOD
-    lcd_write_data8(0x55);
-    lcd_write_cmd(0x36); // MADCTL
-    lcd_write_data8(0x00);
-
-    lcd_write_cmd(0x2A); // CASET
-    lcd_write_data16(0);
-    lcd_write_data16(LCD_WIDTH - 1);
-    lcd_write_cmd(0x2B); // RASET
-    lcd_write_data16(0);
-    lcd_write_data16(LCD_HEIGHT - 1);
-
-    lcd_write_cmd(0x20); // INVOFF
-    lcd_write_cmd(0x13); // NORON
-    lcd_write_cmd(0x29); // DISPON
-    delay(100);
-
-    lcd_fill_screen(COLOR_BLACK);
+     strncpy(last_lines[index], text, sizeof(last_lines[index]) - 1);
+     last_lines[index][sizeof(last_lines[index]) - 1] = '\0';
 }
 
 // ------------------------------------------------------------
@@ -375,25 +268,11 @@ static void handle_slip_frame(const uint8_t* data, size_t len) {
             for (uint8_t id = NODE_B_JOYSTICK; id < NODE_BROADCAST; id++) {
                 const PeerInfo* peer = coordinator.getPeerInfo(id);
                 if (!peer) continue;
-                DiscoveryResponse rsp = {};
-                rsp.node_type = peer->node_type;
-                rsp.capabilities = peer->capabilities;
-                rsp.device_count = peer->device_count;
-                memcpy(rsp.mac_address, peer->mac_address, sizeof(rsp.mac_address));
-                strncpy(rsp.firmware_version, "n/a", FIRMWARE_VERSION_SIZE - 1);
-                strncpy(rsp.node_name, peer->node_name, MAX_NODE_NAME_SIZE - 1);
-
-                uint8_t buffer[MAX_ESPNOW_PAYLOAD];
-                size_t msg_len = buildMessage(buffer, MSG_DISCOVERY_RSP, peer->node_id,
-                                              NODE_COORDINATOR, &rsp, sizeof(rsp));
-                if (slip_send_frame(buffer, msg_len)) {
-                    g_slip_tx_frames++;
-                }
+                // Currently discovery is broadcast, can implement directed discovery here
             }
             break;
         }
-        default:
-            break;
+        default: break;
     }
 }
 
@@ -401,296 +280,211 @@ static void process_slip_rx() {
     while (slipSerial.available()) {
         uint8_t byte = slipSerial.read();
         if (slip_decode_byte(&slip_decoder, byte)) {
-            size_t len = slip_decoder.index;
-            g_slip_rx_frames++;
-            handle_slip_frame(slip_decoder.buffer, len);
+            // Frame complete
+            handle_slip_frame(slip_decoder.buffer, slip_decoder.index);
             slip_decoder_reset(&slip_decoder);
+            g_slip_rx_frames++;
         }
     }
 }
 
+// ------------------------------------------------------------
+// ESP-NOW Callbacks
+// ------------------------------------------------------------
 static void send_to_pc(uint8_t msg_type, uint8_t src_node, const void* payload, size_t payload_len) {
-    uint8_t buffer[MAX_ESPNOW_PAYLOAD];
-    size_t len = buildMessage(buffer, static_cast<MessageType>(msg_type),
-                              src_node, NODE_COORDINATOR, payload, payload_len);
-    if (slip_send_frame(buffer, len)) {
-        g_slip_tx_frames++;
-    }
+    uint8_t buffer[SLIP_MAX_FRAME_SIZE];
+    size_t msg_len = buildMessage(buffer, static_cast<MessageType>(msg_type), src_node, NODE_COORDINATOR,
+                                  payload, payload_len);
+    slip_send_frame(buffer, msg_len);
+    g_slip_tx_frames++;
 }
 
-// ------------------------------------------------------------
-// ESP-NOW callbacks
-// ------------------------------------------------------------
 static void onHIDInput(uint8_t node_id, uint8_t device_id, uint8_t report_id,
                        const uint8_t* report, uint8_t len) {
-    if (len > MAX_HID_REPORT_SIZE) {
-        len = MAX_HID_REPORT_SIZE;
-    }
-    HIDInputPayload payload = {};
-    payload.device_id = device_id;
-    payload.report_id = report_id;
-    payload.report_length = len;
-    memcpy(payload.report_data, report, len);
-    send_to_pc(MSG_HID_INPUT, node_id, &payload, 3 + len);
-    g_esp_rx_frames++;
-    g_esp_rx_bytes += sizeof(MessageHeader) + 3 + len + 1;
+    HIDInputPayload hid;
+    hid.device_id = device_id;
+    hid.report_id = report_id;
+    hid.report_length = len;
+    memcpy(hid.report_data, report, len);
+    send_to_pc(MSG_HID_INPUT, node_id, &hid, 3 + len);
 }
 
 static void onSerialData(uint8_t node_id, uint8_t port_id, const uint8_t* data, uint8_t len) {
-    if (len > MAX_SERIAL_DATA_SIZE) {
-        len = MAX_SERIAL_DATA_SIZE;
-    }
-    SerialDataPayload payload = {};
-    payload.port_id = port_id;
-    payload.data_length = len;
-    memcpy(payload.data, data, len);
-    send_to_pc(MSG_SERIAL_DATA, node_id, &payload, 2 + len);
-    g_esp_rx_frames++;
-    g_esp_rx_bytes += sizeof(MessageHeader) + 2 + len + 1;
+    SerialDataPayload ser;
+    ser.port_id = port_id;
+    ser.data_length = len;
+    memcpy(ser.data, data, len);
+    send_to_pc(MSG_SERIAL_DATA, node_id, &ser, 2 + len);
 }
 
 static void onNodeStatus(uint8_t node_id, bool connected) {
-    if (!connected) {
-        return;
+    ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d %s\n", node_id, connected ? "connected" : "lost");
+    
+    char status_line[32];
+    snprintf(status_line, sizeof(status_line), "Node %d: %s", 
+             node_id, connected ? "OK" : "LOST");
+    uint8_t line_idx = node_id; 
+    lcd_update_line(line_idx, status_line, connected ? COLOR_GREEN : COLOR_RED);
+
+    if (connected && node_id != NODE_BROADCAST) {
+        // Enable pings to this node
+        if (g_latency_target_node == NODE_BROADCAST) {
+            g_latency_target_node = node_id;
+        }
+        send_to_pc(MSG_DISCOVERY_RSP, node_id, nullptr, 0); 
+    } else if (!connected && node_id == g_latency_target_node) {
+        g_latency_target_node = NODE_BROADCAST; // Stop checking this node
     }
-    const PeerInfo* peer = coordinator.getPeerInfo(node_id);
-    if (!peer) {
-        return;
-    }
-    DiscoveryResponse rsp = {};
-    rsp.node_type = peer->node_type;
-    rsp.capabilities = peer->capabilities;
-    rsp.device_count = peer->device_count;
-    memcpy(rsp.mac_address, peer->mac_address, sizeof(rsp.mac_address));
-    strncpy(rsp.firmware_version, "n/a", FIRMWARE_VERSION_SIZE - 1);
-    strncpy(rsp.node_name, peer->node_name, MAX_NODE_NAME_SIZE - 1);
-    send_to_pc(MSG_DISCOVERY_RSP, node_id, &rsp, sizeof(rsp));
 }
 
 static void onTestMessage(uint8_t msg_type, uint8_t node_id,
                           const uint8_t* data, uint8_t len) {
-    send_to_pc(msg_type, node_id, data, len);
-    g_esp_rx_frames++;
-    g_esp_rx_bytes += sizeof(MessageHeader) + len + 1;
-
-    if (msg_type != MSG_TEST_RSP || len < 8) {
-        return;
-    }
-
-    const TestPayload* payload = reinterpret_cast<const TestPayload*>(data);
-    if ((payload->sequence & 0x80000000UL) == 0) {
-        return;
-    }
-
-    uint32_t now = millis();
-    uint32_t rtt_ms = now - payload->timestamp_ms;
-    g_latency_sum_ms += rtt_ms;
-    g_latency_samples++;
-
-    if (g_has_last_rtt) {
-        uint32_t delta = (rtt_ms > g_last_rtt_ms) ? (rtt_ms - g_last_rtt_ms)
-                                                  : (g_last_rtt_ms - rtt_ms);
-        if (delta > g_jitter_max_ms) {
-            g_jitter_max_ms = delta;
+    if (msg_type == MSG_TEST_RSP) {
+        g_has_last_rtt = true;
+        g_last_rtt_ms = millis() - g_test_last_send_ms;
+        g_latency_sum_ms += g_last_rtt_ms;
+        g_latency_samples++;
+        
+        static uint32_t last_log = 0;
+        if (millis() - last_log > 1000) {
+            ESPNOW_LOG_SERIAL.printf("TEST: RTT=%u ms\n", g_last_rtt_ms);
+            last_log = millis();
         }
-    }
-    g_last_rtt_ms = rtt_ms;
-    g_has_last_rtt = true;
-    g_test_inflight = false;
-}
-
-// ------------------------------------------------------------
-// Tasks
-// ------------------------------------------------------------
-static void espnow_task(void* parameter) {
-    (void)parameter;
-    while (true) {
-        coordinator.process();
-        vTaskDelay(pdMS_TO_TICKS(1));
+        
+        g_test_inflight = false;
+        send_to_pc(MSG_TEST_RSP, node_id, data, len);
     }
 }
 
 // ------------------------------------------------------------
-// Setup
+// Setup & Loop
 // ------------------------------------------------------------
 void setup() {
-  #if !ARDUINO_USB_MODE
-    USB.productName("OpenCockpit Wireless Bridge");
+    // 1. Init Serial (Debug on UART0)
+    Serial.begin(115200);
+    // 2. Init USB (CDC for SLIP)
+#if SLIP_USE_CDC
     USB.manufacturerName("OpenCockpit");
     USB.serialNumber("OC-A-001");
     USB.begin();
-  #endif
-    Serial.begin(115200);
-    // Serial.setRxBufferSize(4096);
-    // Serial.setTxTimeoutMs(50);
-    // Serial.enableReboot(false);
-    Serial0.begin(115200);
-    delay(500);
-
-    setupHardware();
-
+    SlipCDC.begin();
+#endif
+    
+    // Init SLIP Decoder
     slip_decoder_init(&slip_decoder);
 
+    // 3. Init hardware (Backlight, etc.)
     lcd_init();
-    lcd_draw_text(10, 10, "OC WIRELESS BUS", COLOR_CYAN, COLOR_BLACK, 2);
 
+    // 4. Init ESP-NOW
     if (!coordinator.begin()) {
-        while (true) {
-            delay(1000);
-        }
+        ESPNOW_LOG_SERIAL.println("Coordinator: ESP-NOW Init Failed");
+        lcd_draw_text(10, 100, "ESPNOW FAIL", COLOR_RED, COLOR_BLACK, 2);
+        while(1) delay(100);
     }
 
+    // Register Callbacks
     coordinator.setHIDInputCallback(onHIDInput);
     coordinator.setSerialDataCallback(onSerialData);
     coordinator.setNodeStatusCallback(onNodeStatus);
     coordinator.setTestMessageCallback(onTestMessage);
 
-    xTaskCreatePinnedToCore(espnow_task, "espnow_task", 4096, nullptr, 24, nullptr, 0);
+    // Initial Screen
+    lcd_fill_screen(COLOR_BLACK);
+    lcd_draw_text(5, 5, "OC WIRELESS BUS", COLOR_CYAN, COLOR_BLACK, 2);
+    lcd_draw_text(5, 230, "Waiting for peers...", COLOR_YELLOW, COLOR_BLACK, 1);
+    
+    // Test Task
+    xTaskCreate(espnow_task, "espnow_task", 4096, NULL, 1, NULL);
 }
 
-// ------------------------------------------------------------
-// Loop
-// ------------------------------------------------------------
 void loop() {
+    coordinator.process();
     process_slip_rx();
-    log_uart_status();
 
-    static uint32_t last_stats_ms = 0;
-    static uint32_t last_slip_rx = 0;
-    static uint32_t last_slip_tx = 0;
-    static uint32_t last_esp_rx = 0;
-    static uint32_t last_esp_tx = 0;
-    static uint32_t last_esp_rx_bytes = 0;
-    static uint32_t last_esp_tx_bytes = 0;
-    static uint32_t last_ping_attempt_ms = 0;
+    // Metrics update
+    static uint32_t last_metric = 0;
+    if (millis() - last_metric > 1000) {
+        char buf[32];
+        
+        // Line 4: SLIP Stats
+        snprintf(buf, sizeof(buf), "SLIP: RX%u TX%u", g_slip_rx_frames, g_slip_tx_frames);
+        lcd_update_line(4, buf, COLOR_CYAN);
 
-    uint32_t now = millis();
-    if (now - last_ping_attempt_ms >= TEST_PING_INTERVAL_MS) {
-        if (g_test_inflight && (now - g_test_last_send_ms) > TEST_PING_TIMEOUT_MS) {
-            g_test_inflight = false;
+        // Line 5: ESP Stats
+        snprintf(buf, sizeof(buf), "ESP: RX%u TX%u", g_esp_rx_frames, g_esp_tx_frames);
+        lcd_update_line(5, buf, COLOR_YELLOW);
+        
+        // Line 6: Latency
+        uint32_t rtt_avg = g_latency_samples > 0 ? (g_latency_sum_ms / g_latency_samples) : 0;
+        int32_t jitter = 0; // TODO: Calculate real jitter
+        if (g_has_last_rtt && g_latency_samples > 1) {
+             // Simple jitter estimate: |last - avg| or store max delta?
+             // Using stored max for this second
+             jitter = g_jitter_max_ms; 
         }
+        snprintf(buf, sizeof(buf), "RTT:%ums Jit:%ums", rtt_avg, jitter);
+        lcd_update_line(6, buf, COLOR_GREEN);
 
-        if (!g_test_inflight) {
-            if (g_latency_target_node == NODE_BROADCAST) {
-                for (uint8_t id = NODE_B_JOYSTICK; id < NODE_BROADCAST; id++) {
-                    const PeerInfo* peer = coordinator.getPeerInfo(id);
-                    if (peer && peer->connected) {
-                        g_latency_target_node = id;
-                        break;
-                    }
-                }
-            }
+        // Line 7: Nodes & Channel
+        // Chan Util: (Bytes * 8 * 100) / 6Mbps
+        uint32_t total_bytes = g_esp_rx_bytes + g_esp_tx_bytes;
+        uint32_t chan_util = (total_bytes * 8 * 100) / 6000000;
+        snprintf(buf, sizeof(buf), "Nodes:%u Ch:%u%%", coordinator.getConnectedNodeCount(), chan_util);
+        lcd_update_line(7, buf, COLOR_WHITE);
 
-            if (g_latency_target_node != NODE_BROADCAST) {
-                const PeerInfo* peer = coordinator.getPeerInfo(g_latency_target_node);
-                if (peer && peer->connected) {
-                    TestPayload payload = {};
-                    payload.sequence = 0x80000000UL | (g_test_seq++ & 0x7FFFFFFFUL);
-                    payload.timestamp_ms = now;
-
-                    uint8_t buffer[MAX_ESPNOW_PAYLOAD];
-                    size_t msg_len = buildMessage(buffer, MSG_TEST_REQ, NODE_COORDINATOR,
-                                                  g_latency_target_node, &payload, sizeof(payload));
-                    esp_now_send(peer->mac_address, buffer, msg_len);
-                    g_esp_tx_frames++;
-                    g_esp_tx_bytes += msg_len;
-                    g_test_inflight = true;
-                    g_test_last_send_ms = now;
-                } else {
-                    g_latency_target_node = NODE_BROADCAST;
-                }
-            }
-        }
-        last_ping_attempt_ms = now;
-    }
-
-    if (now - last_stats_ms >= 1000) {
-        uint32_t slip_rx = g_slip_rx_frames;
-        uint32_t slip_tx = g_slip_tx_frames;
-        uint32_t esp_rx = g_esp_rx_frames;
-        uint32_t esp_tx = g_esp_tx_frames;
-        uint32_t esp_rx_bytes = g_esp_rx_bytes;
-        uint32_t esp_tx_bytes = g_esp_tx_bytes;
-
-        uint32_t slip_rx_rate = slip_rx - last_slip_rx;
-        uint32_t slip_tx_rate = slip_tx - last_slip_tx;
-        uint32_t esp_rx_rate = esp_rx - last_esp_rx;
-        uint32_t esp_tx_rate = esp_tx - last_esp_tx;
-        uint32_t esp_rx_bps = esp_rx_bytes - last_esp_rx_bytes;
-        uint32_t esp_tx_bps = esp_tx_bytes - last_esp_tx_bytes;
-
-        last_slip_rx = slip_rx;
-        last_slip_tx = slip_tx;
-        last_esp_rx = esp_rx;
-        last_esp_tx = esp_tx;
-        last_esp_rx_bytes = esp_rx_bytes;
-        last_esp_tx_bytes = esp_tx_bytes;
-        last_stats_ms = now;
-
-        char line1[32];
-        char line2[32];
-        char line3[32];
-        char line4[32];
-        char line5[32];
-        char line6[32];
-        char line7[32];
-        char line8[32];
-
-        uint32_t total_bps = (esp_rx_bps + esp_tx_bps) * 8;
-        uint32_t channel_use = (total_bps * 100UL) / ESPNOW_LINK_BPS;
-        if (channel_use > 100) {
-            channel_use = 100;
-        }
-
-        uint32_t avg_rtt_ms = 0;
-        if (g_latency_samples > 0) {
-            avg_rtt_ms = (g_latency_sum_ms + (g_latency_samples / 2)) / g_latency_samples;
-        }
-        uint8_t nodes = coordinator.getConnectedNodeCount();
-
-        snprintf(line1, sizeof(line1), "Nodes: %u", nodes);
-        snprintf(line2, sizeof(line2), "SLIP RX: %lu/s", static_cast<unsigned long>(slip_rx_rate));
-        snprintf(line3, sizeof(line3), "SLIP TX: %lu/s", static_cast<unsigned long>(slip_tx_rate));
-        snprintf(line4, sizeof(line4), "ESP RX: %lu/s", static_cast<unsigned long>(esp_rx_rate));
-        snprintf(line5, sizeof(line5), "ESP TX: %lu/s", static_cast<unsigned long>(esp_tx_rate));
-        if (g_latency_samples > 0) {
-            snprintf(line6, sizeof(line6), "RTT avg: %lums", static_cast<unsigned long>(avg_rtt_ms));
-            snprintf(line7, sizeof(line7), "Jitter max: %lums", static_cast<unsigned long>(g_jitter_max_ms));
-        } else {
-            snprintf(line6, sizeof(line6), "RTT avg: --");
-            snprintf(line7, sizeof(line7), "Jitter max: --");
-        }
-        snprintf(line8, sizeof(line8), "Chan use: %lu%%", static_cast<unsigned long>(channel_use));
-
-        lcd_update_line(0, line1, COLOR_GREEN);
-        lcd_update_line(1, line2, COLOR_GREEN);
-        lcd_update_line(2, line3, COLOR_GREEN);
-        lcd_update_line(3, line4, COLOR_YELLOW);
-        lcd_update_line(4, line5, COLOR_YELLOW);
-        lcd_update_line(5, line6, COLOR_CYAN);
-        lcd_update_line(6, line7, COLOR_CYAN);
-        lcd_update_line(7, line8, COLOR_CYAN);
-
-        g_latency_sum_ms = 0;
-        g_latency_samples = 0;
+        // Reset per-second counters
+        g_slip_rx_frames = 0; g_slip_tx_frames = 0;
+        g_esp_rx_frames = 0; g_esp_tx_frames = 0;
+        g_esp_rx_bytes = 0; g_esp_tx_bytes = 0;
+        g_latency_sum_ms = 0; g_latency_samples = 0;
         g_jitter_max_ms = 0;
+        last_metric = millis();
     }
+}
 
-    delay(1);
+static void espnow_task(void* parameter) {
+    while(1) {
+        // Send Ping if configured
+        if (g_latency_target_node != NODE_BROADCAST && !g_test_inflight &&
+            (millis() - g_test_last_send_ms > TEST_PING_INTERVAL_MS)) {
+                
+            const PeerInfo* peer = coordinator.getPeerInfo(g_latency_target_node);
+            if (peer) {
+                uint8_t payload[4];
+                memcpy(payload, &g_test_seq, 4);
+                
+                uint8_t buffer[MAX_ESPNOW_PAYLOAD];
+                size_t msg_len = buildMessage(buffer, MSG_TEST_REQ, NODE_COORDINATOR,
+                                              g_latency_target_node, payload, 4);
+                
+                if (esp_now_send(peer->mac_address, buffer, msg_len) == ESP_OK) {
+                    g_test_last_send_ms = millis();
+                    g_test_inflight = true;
+                    g_test_seq++;
+                }
+            }
+        }
+        
+        // Timeout check
+        if (g_test_inflight && (millis() - g_test_last_send_ms > TEST_PING_TIMEOUT_MS)) {
+            g_test_inflight = false; // Timeout
+        }
+        
+        delay(10);
+    }
 }
 
 static void log_uart_status() {
     (void)slipSerial;
 }
 
-// Fallback if USBSerial is not defined by the core but CDCOnBoot is enabled
-#if !defined(USBSerial) && defined(ARDUINO_USB_CDC_ON_BOOT)
-    #define USBSerial Serial
-#endif
-
 static bool slip_send_frame(const uint8_t* data, size_t len) {
 #if SLIP_USE_CDC
-    if (!USBSerial) {
+    // Use the dedicated SlipCDC object defined in main
+    extern USBCDC SlipCDC;
+
+    if (!SlipCDC) {
         return false;
     }
 
@@ -699,12 +493,12 @@ static bool slip_send_frame(const uint8_t* data, size_t len) {
     if (encoded_len > sizeof(encoded)) {
         return false;
     }
-    if (USBSerial.availableForWrite() < static_cast<int>(encoded_len)) {
+    if (SlipCDC.availableForWrite() < static_cast<int>(encoded_len)) {
         return false;
     }
 
     slip_encode(data, len, encoded);
-    size_t written = Serial.write(encoded, encoded_len);
+    size_t written = SlipCDC.write(encoded, encoded_len);
     return written == encoded_len;
 #else
     slip_send(data, len, slipSerial);
