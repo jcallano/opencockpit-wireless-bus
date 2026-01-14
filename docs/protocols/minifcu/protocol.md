@@ -39,9 +39,9 @@ This project provides:
 
 ## Arduino Code Files
 
-### `arduino_code/esphost/esphost.ino`
+### `firmware/peripherals/node_c/node_c.ino`
 
-**Purpose:** ESP32-S3 USB Host that connects directly to the MiniFCU hardware.
+**Purpose:** ESP32-S3 USB Host/Bridge that connects directly to the MiniFCU hardware (Node C).
 
 **Functionality:**
 - Acts as USB Host to communicate with the CH340 USB-to-Serial chip inside the MiniFCU
@@ -67,9 +67,9 @@ This project provides:
 
 ---
 
-### `arduino_code/espdev/espdev.ino`
+### `firmware/coordinator/coordinator.ino`
 
-**Purpose:** ESP32-S3 Device that connects to the PC via USB Native.
+**Purpose:** ESP32-S3 Coordinator that connects to the PC via USB Native.
 
 **Functionality:**
 - Connects to PC as a USB CDC device (appears as COM port)
@@ -390,8 +390,8 @@ void loop() {}
 
 | File | Description |
 |------|-------------|
-| `arduino_code/esphost/esphost.ino` | USB Host bridge - connects to MiniFCU hardware |
-| `arduino_code/espdev/espdev.ino` | USB Device bridge - connects to PC |
+| `firmware/peripherals/node_c/node_c.ino` | USB Host bridge - connects to MiniFCU hardware |
+| `firmware/coordinator/coordinator.ino` | Coordinator bridge - connects to PC |
 | `minifcu_emulator.py` | Python hardware emulator for testing |
 | `dump.txt` | Raw protocol capture from man-in-the-middle session |
 | `requirements.txt` | Python dependencies |

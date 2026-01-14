@@ -703,7 +703,7 @@ Reference: `OpenCockpit_MiniFCU_Comm_Protocol` repository
 │                    ESP-NOW MESSAGE FRAME                           │
 ├────────┬────────┬────────┬────────┬────────────────────┬──────────┤
 │ Header │Msg Type│Src Node│Dst Node│      Payload       │ Checksum │
-│ (1B)   │ (1B)   │ (1B)   │ (1B)   │     (0-246B)       │  (1B)    │
+│ (1B)   │ (1B)   │ (1B)   │ (1B)   │     (0-245B)       │  (1B)    │
 ├────────┼────────┼────────┼────────┼────────────────────┼──────────┤
 │  0xAA  │  Type  │  Src   │  Dst   │       Data         │   CRC8   │
 └────────┴────────┴────────┴────────┴────────────────────┴──────────┘
@@ -736,9 +736,19 @@ Reference: `OpenCockpit_MiniFCU_Comm_Protocol` repository
 | 0x02 | Node C (Quadrant + FCU) |
 | 0xFF | Broadcast |
 
-### 8.4 Message Payload Structures
+### 8.4 Device Identifiers
 
-#### 8.4.1 Discovery Response (0x02)
+| Device ID | Name | Description |
+|-----------|------|-------------|
+| 0x01 | DEV_TCA_SIDESTICK | Thrustmaster TCA Sidestick |
+| 0x02 | DEV_TCA_QUADRANT | Thrustmaster TCA Quadrant |
+| 0x03 | DEV_WINWING_MCDU | WinWing MCDU |
+| 0x04 | DEV_MINIFCU | MiniCockpit MiniFCU |
+| 0x05 | DEV_MINIEFIS | MiniCockpit MiniEFIS |
+
+### 8.5 Message Payload Structures
+
+#### 8.5.1 Discovery Response (0x02)
 
 ```cpp
 struct DiscoveryResponse {
@@ -751,7 +761,7 @@ struct DiscoveryResponse {
 };
 ```
 
-#### 8.4.2 HID Input (0x20)
+#### 8.5.2 HID Input (0x20)
 
 ```cpp
 struct HIDInputMessage {
@@ -762,7 +772,7 @@ struct HIDInputMessage {
 };
 ```
 
-#### 8.4.3 HID Output (0x21)
+#### 8.5.3 HID Output (0x21)
 
 ```cpp
 struct HIDOutputMessage {
@@ -773,7 +783,7 @@ struct HIDOutputMessage {
 };
 ```
 
-#### 8.4.4 Serial Data (0x30)
+#### 8.5.4 Serial Data (0x30)
 
 ```cpp
 struct SerialDataMessage {
@@ -783,7 +793,7 @@ struct SerialDataMessage {
 };
 ```
 
-#### 8.4.5 MCDU Display (0x40)
+#### 8.5.5 MCDU Display (0x40)
 
 ```cpp
 struct MCDUDisplayMessage {
@@ -796,7 +806,7 @@ struct MCDUDisplayMessage {
 };
 ```
 
-### 8.5 Flow Control
+### 8.6 Flow Control
 
 | Mechanism | Description |
 |-----------|-------------|
