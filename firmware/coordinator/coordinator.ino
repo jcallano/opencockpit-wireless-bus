@@ -11,6 +11,12 @@
 #include <SPI.h>
 #include "USB.h"
 
+// Compatibility for ESP32-S3 Arduino Core v3.x
+#if !defined(USBSerial)
+#define USBSerial Serial
+#endif
+
+
 struct NullSerial {
     template <typename... Args>
     void printf(const char*, Args...) {}
@@ -515,9 +521,9 @@ void setup() {
     USB.begin();
   #endif
     Serial.begin(115200);
-    Serial.setRxBufferSize(4096);
-    Serial.setTxTimeoutMs(50);
-    Serial.enableReboot(false);
+    // Serial.setRxBufferSize(4096);
+    // Serial.setTxTimeoutMs(50);
+    // Serial.enableReboot(false);
     Serial0.begin(115200);
     delay(500);
 
@@ -676,6 +682,11 @@ void loop() {
 static void log_uart_status() {
     (void)slipSerial;
 }
+
+// Fallback if USBSerial is not defined by the core but CDCOnBoot is enabled
+#if !defined(USBSerial) && defined(ARDUINO_USB_CDC_ON_BOOT)
+    #define USBSerial Serial
+#endif
 
 static bool slip_send_frame(const uint8_t* data, size_t len) {
 #if SLIP_USE_CDC
