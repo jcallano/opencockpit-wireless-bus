@@ -106,6 +106,13 @@ class SlipSerial:
             timeout: Read timeout in seconds
         """
         self.serial = serial.Serial(port, baudrate, timeout=timeout)
+        # Ensure line is asserted for CDC implementations that gate RX on DTR/RTS.
+        try:
+            self.serial.dtr = True
+            self.serial.rts = True
+        except Exception:
+            pass
+        self.serial.reset_input_buffer()
         self.decoder = SlipDecoder()
 
     def send(self, data: bytes) -> int:
@@ -121,19 +128,22 @@ class SlipSerial:
         encoded = slip_encode(data)
         return self.serial.write(encoded)
 
-    def receive(self) -> Optional[bytes]:
+    def receive(self, max_bytes: int = 256) -> Optional[bytes]:
         """
         Try to receive a complete SLIP frame.
 
         Returns:
             Complete frame bytes if available, None otherwise
         """
-        while self.serial.in_waiting > 0:
+        read_count = 0
+        while self.serial.in_waiting > 0 and read_count < max_bytes:
             byte = self.serial.read(1)
-            if byte:
-                frame = self.decoder.decode_byte(byte[0])
-                if frame is not None:
-                    return frame
+            if not byte:
+                break
+            read_count += 1
+            frame = self.decoder.decode_byte(byte[0])
+            if frame is not None:
+                return frame
         return None
 
     def receive_blocking(self, timeout: float = 1.0) -> Optional[bytes]:

@@ -27,6 +27,8 @@ enum MessageType : uint8_t {
     MSG_SERIAL_DATA     = 0x30,
     MSG_MCDU_DISPLAY    = 0x40,
     MSG_MCDU_INPUT      = 0x41,
+    MSG_TEST_REQ        = 0xE0,
+    MSG_TEST_RSP        = 0xE1,
     MSG_ERROR           = 0xF0,
     MSG_RESET           = 0xFF
 };
@@ -162,6 +164,13 @@ struct ErrorPayload {
 struct HeartbeatPayload {
     uint32_t timestamp_ms;          // Sender's millis()
     uint8_t status;                 // Node status flags
+};
+
+// Test message payload (echoed back by node)
+struct TestPayload {
+    uint32_t sequence;
+    uint32_t timestamp_ms;
+    uint8_t data[0];                // Optional variable-length data
 };
 
 // Complete message structure (header + max payload + CRC)

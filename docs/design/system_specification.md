@@ -412,6 +412,39 @@ void initEspNow() {
 | Core 1 | SLIP encode/decode | High |
 | Core 1 | Message routing | Medium |
 
+#### 6.1.4 Hardware Reference (ESP32-S3-USB-OTG)
+
+Node A uses the ESP32-S3-USB-OTG board and runs in USB device mode only.
+
+| Signal | GPIO | Notes |
+|--------|------|-------|
+| USB_SEL | GPIO18 | LOW = USB_DEV (PC connection). Kept LOW for Node A. |
+| USB D- | GPIO19 | Connected to USB differential D-. |
+| USB D+ | GPIO20 | Connected to USB differential D+. |
+| LIMIT_EN | GPIO17 | USB_HOST current limit enable (unused for Node A). |
+| DEV_VBUS_EN | GPIO12 | USB_HOST VBUS enable (unused for Node A). |
+| BOOST_EN | GPIO13 | Battery boost enable (unused for Node A). |
+| LCD_RST | GPIO8 | LCD reset (active low). |
+| LCD_EN | GPIO5 | LCD enable (active low). |
+| LCD_DC | GPIO4 | LCD data/command select. |
+| LCD_SCLK | GPIO6 | LCD SPI clock. |
+| LCD_MOSI | GPIO7 | LCD SPI MOSI. |
+| LCD_BL | GPIO9 | LCD backlight. |
+
+#### 6.1.5 LCD Network Metrics
+
+The LCD renders coordinator status once per second. Metrics are derived from ESP-NOW traffic
+plus an internal test ping (MSG_TEST) sent by Node A to an active node.
+
+| Metric | Description |
+|--------|-------------|
+| Nodes | Connected nodes in the peer table. |
+| SLIP RX/TX | SLIP frames per second between PC and Node A. |
+| ESP RX/TX | ESP-NOW messages per second. |
+| RTT avg | Average round-trip time for internal MSG_TEST pings (ms). |
+| Jitter max | Maximum delta between consecutive RTT samples (ms). |
+| Chan use | Estimated channel utilization = (ESP RX bytes + ESP TX bytes) * 8 / 6 Mbps. |
+
 ### 6.2 Node B - Joystick + MCDU Peripheral
 
 #### 6.2.1 Responsibilities
@@ -857,7 +890,12 @@ USB Device (Node A)
 | Parity | None |
 | Stop Bits | 1 |
 | Flow Control | None |
-| Buffer Size | 1024 bytes TX, 1024 bytes RX |
+| Buffer Size | RX 4096 bytes (firmware), TX default (core) |
+
+**Operational notes (Node A):**
+- SLIP must use the native USB CDC port; debug logs go to UART0 (pins 44/43) to keep CDC clean.
+- Avoid blocking writes on CDC: only transmit a SLIP frame when the full encoded frame fits in the TX buffer.
+- When running inside a VM, do not reset Node A while testing; CDC can detach and change the host port.
 
 ### 10.2 SLIP Protocol Specification
 

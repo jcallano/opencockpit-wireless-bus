@@ -3,7 +3,7 @@
  * ESP-NOW Coordinator Implementation - Node A
  */
 
-#include "espnow_coordinator.h"
+#include "include/espnow_coordinator.h"
 
 // Global instance
 ESPNowCoordinator coordinator;
@@ -22,6 +22,7 @@ ESPNowCoordinator::ESPNowCoordinator()
     , _hid_input_callback(nullptr)
     , _serial_data_callback(nullptr)
     , _node_status_callback(nullptr)
+    , _test_callback(nullptr)
 {
     memset(_peers, 0, sizeof(_peers));
     memset(_my_mac, 0, sizeof(_my_mac));
@@ -29,7 +30,7 @@ ESPNowCoordinator::ESPNowCoordinator()
 }
 
 bool ESPNowCoordinator::begin() {
-    Serial.println("Coordinator: Initializing...");
+    ESPNOW_LOG_SERIAL.println("Coordinator: Initializing...");
 
     // Create queues
     _tx_queue = xQueueCreate(TX_QUEUE_SIZE, sizeof(QueuedMessage));
@@ -37,14 +38,14 @@ bool ESPNowCoordinator::begin() {
     _peer_mutex = xSemaphoreCreateMutex();
 
     if (!_tx_queue || !_rx_queue || !_peer_mutex) {
-        Serial.println("Coordinator: Failed to create queues");
+        ESPNOW_LOG_SERIAL.println("Coordinator: Failed to create queues");
         _state = COORD_STATE_ERROR;
         return false;
     }
 
     // Initialize ESP-NOW with optimized settings
     if (!initEspNowOptimized()) {
-        Serial.println("Coordinator: Failed to init ESP-NOW");
+        ESPNOW_LOG_SERIAL.println("Coordinator: Failed to init ESP-NOW");
         _state = COORD_STATE_ERROR;
         return false;
     }
@@ -53,7 +54,7 @@ bool ESPNowCoordinator::begin() {
     getDeviceMac(_my_mac);
     char mac_str[18];
     macToString(_my_mac, mac_str);
-    Serial.printf("Coordinator: MAC Address: %s\n", mac_str);
+    ESPNOW_LOG_SERIAL.printf("Coordinator: MAC Address: %s\n", mac_str);
 
     // Register callbacks
     esp_now_register_send_cb(ESPNowCoordinator::onDataSent);
@@ -61,14 +62,14 @@ bool ESPNowCoordinator::begin() {
 
     // Add broadcast peer for discovery
     if (!addEspNowPeer(BROADCAST_MAC)) {
-        Serial.println("Coordinator: Failed to add broadcast peer");
+        ESPNOW_LOG_SERIAL.println("Coordinator: Failed to add broadcast peer");
         _state = COORD_STATE_ERROR;
         return false;
     }
 
     _state = COORD_STATE_DISCOVERY;
     _last_discovery_ms = millis();
-    Serial.println("Coordinator: Starting discovery...");
+    ESPNOW_LOG_SERIAL.println("Coordinator: Starting discovery...");
 
     return true;
 }
@@ -82,7 +83,7 @@ void ESPNowCoordinator::process() {
             // Transition to active after timeout or when nodes found
             if (now - _last_discovery_ms > DISCOVERY_TIMEOUT_MS || _peer_count > 0) {
                 _state = COORD_STATE_ACTIVE;
-                Serial.printf("Coordinator: Active with %d peers\n", _peer_count);
+                ESPNOW_LOG_SERIAL.printf("Coordinator: Active with %d peers\n", _peer_count);
             }
             break;
 
@@ -133,7 +134,7 @@ void ESPNowCoordinator::processHeartbeats() {
         if (_peers[i].registered && _peers[i].connected) {
             // Check for timeout
             if (now - _peers[i].last_heartbeat_ms > HEARTBEAT_TIMEOUT_MS) {
-                Serial.printf("Coordinator: Node %d lost\n", _peers[i].node_id);
+                ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d lost\n", _peers[i].node_id);
                 _peers[i].connected = false;
                 if (_node_status_callback) {
                     _node_status_callback(_peers[i].node_id, false);
@@ -154,7 +155,7 @@ void ESPNowCoordinator::processRxQueue() {
     while (xQueueReceive(_rx_queue, &msg, 0) == pdTRUE) {
         // Validate message
         if (!validateMessage(msg.data, msg.length)) {
-            Serial.println("Coordinator: Invalid message CRC");
+            ESPNOW_LOG_SERIAL.println("Coordinator: Invalid message CRC");
             continue;
         }
 
@@ -178,6 +179,9 @@ void ESPNowCoordinator::processRxQueue() {
                     handleHeartbeat(msg.mac_address, (const HeartbeatPayload*)payload);
                 }
                 break;
+            case MSG_HEARTBEAT_ACK:
+                // Heartbeat ACK from nodes; no action required
+                break;
 
             case MSG_HID_INPUT:
                 if (payload_len >= 3) { // Minimum: device_id + report_id + length
@@ -197,8 +201,13 @@ void ESPNowCoordinator::processRxQueue() {
                 }
                 break;
 
+            case MSG_TEST_REQ:
+            case MSG_TEST_RSP:
+                handleTestMessage(msg.mac_address, hdr->msg_type, payload, payload_len);
+                break;
+
             default:
-                Serial.printf("Coordinator: Unknown message type: 0x%02X\n", hdr->msg_type);
+                ESPNOW_LOG_SERIAL.printf("Coordinator: Unknown message type: 0x%02X\n", hdr->msg_type);
                 break;
         }
     }
@@ -215,7 +224,7 @@ void ESPNowCoordinator::processTxQueue() {
 
         esp_err_t result = esp_now_send(msg.mac_address, msg.data, msg.length);
         if (result != ESP_OK) {
-            Serial.printf("Coordinator: Send failed: %d\n", result);
+            ESPNOW_LOG_SERIAL.printf("Coordinator: Send failed: %d\n", result);
         }
     }
 }
@@ -223,7 +232,8 @@ void ESPNowCoordinator::processTxQueue() {
 void ESPNowCoordinator::handleDiscoveryResponse(const uint8_t* mac, const DiscoveryResponse* response) {
     char mac_str[18];
     macToString(mac, mac_str);
-    Serial.printf("Coordinator: Discovery response from %s\n", mac_str);
+    ESPNOW_LOG_SERIAL.printf("Coordinator: Discovery response from %s (type=0x%02X caps=0x%02X)\n",
+                   mac_str, response->node_type, response->capabilities);
 
     xSemaphoreTake(_peer_mutex, portMAX_DELAY);
 
@@ -240,7 +250,7 @@ void ESPNowCoordinator::handleDiscoveryResponse(const uint8_t* mac, const Discov
     }
 
     if (peer == nullptr) {
-        Serial.println("Coordinator: No peer slots available");
+        ESPNOW_LOG_SERIAL.println("Coordinator: No peer slots available");
         xSemaphoreGive(_peer_mutex);
         return;
     }
@@ -255,7 +265,8 @@ void ESPNowCoordinator::handleDiscoveryResponse(const uint8_t* mac, const Discov
 
     // Assign node ID if not already registered
     if (!peer->registered) {
-        peer->node_id = assignNodeId();
+        peer->node_id = assignNodeId(response->node_type, response->capabilities);
+        ESPNOW_LOG_SERIAL.printf("Coordinator: Assigned node id 0x%02X to %s\n", peer->node_id, mac_str);
         _peer_count++;
     }
 
@@ -276,7 +287,9 @@ void ESPNowCoordinator::handleRegisterAck(const uint8_t* mac, uint8_t node_id) {
         peer->registered = true;
         peer->connected = true;
         peer->last_heartbeat_ms = millis();
-        Serial.printf("Coordinator: Node %d registered: %s\n", peer->node_id, peer->node_name);
+        ESPNOW_LOG_SERIAL.printf("Coordinator: Register ACK from %02X (peer id %02X)\n",
+                       node_id, peer->node_id);
+        ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d registered: %s\n", peer->node_id, peer->node_name);
 
         if (_node_status_callback) {
             _node_status_callback(peer->node_id, true);
@@ -295,7 +308,7 @@ void ESPNowCoordinator::handleHeartbeat(const uint8_t* mac, const HeartbeatPaylo
 
         if (!peer->connected) {
             peer->connected = true;
-            Serial.printf("Coordinator: Node %d reconnected\n", peer->node_id);
+            ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d reconnected\n", peer->node_id);
             if (_node_status_callback) {
                 _node_status_callback(peer->node_id, true);
             }
@@ -314,21 +327,37 @@ void ESPNowCoordinator::handleHeartbeat(const uint8_t* mac, const HeartbeatPaylo
 
 void ESPNowCoordinator::handleHIDInput(const uint8_t* mac, const HIDInputPayload* payload) {
     if (_hid_input_callback && payload->report_length <= MAX_HID_REPORT_SIZE) {
-        _hid_input_callback(payload->device_id, payload->report_data, payload->report_length);
+        uint8_t node_id = NODE_BROADCAST;
+        PeerInfo* peer = findPeerByMac(mac);
+        if (peer) {
+            node_id = peer->node_id;
+        }
+        _hid_input_callback(node_id, payload->device_id, payload->report_id,
+                            payload->report_data, payload->report_length);
     }
 }
 
 void ESPNowCoordinator::handleSerialData(const uint8_t* mac, const SerialDataPayload* payload) {
     if (_serial_data_callback && payload->data_length <= MAX_SERIAL_DATA_SIZE) {
-        _serial_data_callback(payload->data, payload->data_length);
+        uint8_t node_id = NODE_BROADCAST;
+        PeerInfo* peer = findPeerByMac(mac);
+        if (peer) {
+            node_id = peer->node_id;
+        }
+        _serial_data_callback(node_id, payload->port_id, payload->data, payload->data_length);
     }
 }
 
 void ESPNowCoordinator::handleMCDUInput(const uint8_t* mac, const MCDUInputPayload* payload) {
     // MCDU button press - route to HID callback with MCDU device ID
     if (_hid_input_callback) {
+        uint8_t node_id = NODE_BROADCAST;
+        PeerInfo* peer = findPeerByMac(mac);
+        if (peer) {
+            node_id = peer->node_id;
+        }
         uint8_t report[2] = {payload->button_index, payload->button_state};
-        _hid_input_callback(DEV_WINWING_MCDU, report, 2);
+        _hid_input_callback(node_id, DEV_WINWING_MCDU, 0, report, 2);
     }
 }
 
@@ -358,7 +387,8 @@ bool ESPNowCoordinator::sendHIDOutput(uint8_t node_id, uint8_t device_id,
     return sendMessage(mac, buffer, msg_len);
 }
 
-bool ESPNowCoordinator::sendSerialData(uint8_t node_id, const uint8_t* data, uint8_t len) {
+bool ESPNowCoordinator::sendSerialData(uint8_t node_id, uint8_t port_id,
+                                       const uint8_t* data, uint8_t len) {
     xSemaphoreTake(_peer_mutex, portMAX_DELAY);
     PeerInfo* peer = findPeerById(node_id);
     if (!peer || !peer->connected) {
@@ -371,7 +401,7 @@ bool ESPNowCoordinator::sendSerialData(uint8_t node_id, const uint8_t* data, uin
     xSemaphoreGive(_peer_mutex);
 
     SerialDataPayload payload;
-    payload.port_id = 0;
+    payload.port_id = port_id;
     payload.data_length = len;
     memcpy(payload.data, data, len);
 
@@ -413,6 +443,10 @@ void ESPNowCoordinator::setNodeStatusCallback(NodeStatusCallback callback) {
     _node_status_callback = callback;
 }
 
+void ESPNowCoordinator::setTestMessageCallback(TestMessageCallback callback) {
+    _test_callback = callback;
+}
+
 uint8_t ESPNowCoordinator::getConnectedNodeCount() const {
     uint8_t count = 0;
     for (int i = 0; i < MAX_PEERS; i++) {
@@ -421,6 +455,19 @@ uint8_t ESPNowCoordinator::getConnectedNodeCount() const {
         }
     }
     return count;
+}
+
+void ESPNowCoordinator::handleTestMessage(const uint8_t* mac, uint8_t msg_type,
+                                          const uint8_t* payload, size_t payload_len) {
+    if (!_test_callback) {
+        return;
+    }
+    uint8_t node_id = NODE_BROADCAST;
+    PeerInfo* peer = findPeerByMac(mac);
+    if (peer) {
+        node_id = peer->node_id;
+    }
+    _test_callback(msg_type, node_id, payload, payload_len);
 }
 
 const PeerInfo* ESPNowCoordinator::getPeerInfo(uint8_t node_id) const {
@@ -461,6 +508,9 @@ void ESPNowCoordinator::sendRegistration(const uint8_t* mac, uint8_t assigned_id
     size_t len = buildMessage(buffer, MSG_REGISTER_REQ, NODE_COORDINATOR,
                               assigned_id, &req, sizeof(req));
 
+    char mac_str[18];
+    macToString(mac, mac_str);
+    ESPNOW_LOG_SERIAL.printf("Coordinator: Send REGISTER_REQ id=0x%02X -> %s\n", assigned_id, mac_str);
     esp_now_send(mac, buffer, len);
 }
 
@@ -478,7 +528,7 @@ void ESPNowCoordinator::sendHeartbeatToNode(uint8_t node_id) {
 
 PeerInfo* ESPNowCoordinator::findPeerByMac(const uint8_t* mac) {
     for (int i = 0; i < MAX_PEERS; i++) {
-        if (memcmp(_peers[i].mac_address, mac, 6) == 0 && _peers[i].registered) {
+        if (memcmp(_peers[i].mac_address, mac, 6) == 0) {
             return &_peers[i];
         }
     }
@@ -494,33 +544,52 @@ PeerInfo* ESPNowCoordinator::findPeerById(uint8_t node_id) {
     return nullptr;
 }
 
-uint8_t ESPNowCoordinator::assignNodeId() {
-    // Start from NODE_B_JOYSTICK and find first unused
-    for (uint8_t id = NODE_B_JOYSTICK; id < NODE_BROADCAST; id++) {
-        bool used = false;
+uint8_t ESPNowCoordinator::assignNodeId(uint8_t node_type, uint8_t capabilities) {
+    auto is_used = [this](uint8_t id) {
         for (int i = 0; i < MAX_PEERS; i++) {
             if (_peers[i].registered && _peers[i].node_id == id) {
-                used = true;
-                break;
+                return true;
             }
         }
-        if (!used) return id;
+        return false;
+    };
+
+    uint8_t preferred = NODE_BROADCAST;
+    if ((capabilities & CAP_SERIAL) && !(capabilities & CAP_DISPLAY)) {
+        preferred = NODE_C_QUADRANT;
+    } else if (capabilities & CAP_DISPLAY) {
+        preferred = NODE_B_JOYSTICK;
+    } else if (node_type == NODE_TYPE_SERIAL) {
+        preferred = NODE_C_QUADRANT;
+    } else if (node_type == NODE_TYPE_HID) {
+        preferred = NODE_B_JOYSTICK;
+    }
+
+    if (preferred != NODE_BROADCAST && !is_used(preferred)) {
+        return preferred;
+    }
+
+    for (uint8_t id = NODE_B_JOYSTICK; id < NODE_BROADCAST; id++) {
+        if (!is_used(id)) {
+            return id;
+        }
     }
     return NODE_BROADCAST; // Error: no IDs available
 }
 
 // Static ESP-NOW callbacks
-void ESPNowCoordinator::onDataSent(const uint8_t* mac_addr, esp_now_send_status_t status) {
+void ESPNowCoordinator::onDataSent(const wifi_tx_info_t* info, esp_now_send_status_t status) {
+    (void)info;
     if (status != ESP_NOW_SEND_SUCCESS) {
         // Could implement retry logic here
     }
 }
 
-void ESPNowCoordinator::onDataReceived(const uint8_t* mac_addr, const uint8_t* data, int len) {
-    if (!g_coordinator || len <= 0 || len > MAX_ESPNOW_PAYLOAD) return;
+void ESPNowCoordinator::onDataReceived(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
+    if (!g_coordinator || !info || !data || len <= 0 || len > MAX_ESPNOW_PAYLOAD) return;
 
     QueuedMessage msg;
-    memcpy(msg.mac_address, mac_addr, 6);
+    memcpy(msg.mac_address, info->src_addr, 6);
     memcpy(msg.data, data, len);
     msg.length = len;
     msg.timestamp = millis();

@@ -13,8 +13,11 @@
 #include <freertos/task.h>
 #include <freertos/queue.h>
 #include <freertos/semphr.h>
-#include "../../common/protocol.h"
-#include "../../common/espnow_config.h"
+#ifndef ESPNOW_LOG_SERIAL
+#define ESPNOW_LOG_SERIAL Serial0
+#endif
+#include "../common/protocol.h"
+#include "../common/espnow_config.h"
 
 // Coordinator states
 enum CoordinatorState {
@@ -33,9 +36,13 @@ struct QueuedMessage {
 };
 
 // Callback types
-typedef void (*HIDInputCallback)(uint8_t device_id, const uint8_t* report, uint8_t len);
-typedef void (*SerialDataCallback)(const uint8_t* data, uint8_t len);
+typedef void (*HIDInputCallback)(uint8_t node_id, uint8_t device_id, uint8_t report_id,
+                                 const uint8_t* report, uint8_t len);
+typedef void (*SerialDataCallback)(uint8_t node_id, uint8_t port_id,
+                                   const uint8_t* data, uint8_t len);
 typedef void (*NodeStatusCallback)(uint8_t node_id, bool connected);
+typedef void (*TestMessageCallback)(uint8_t msg_type, uint8_t node_id,
+                                    const uint8_t* data, uint8_t len);
 
 class ESPNowCoordinator {
 public:
@@ -49,23 +56,23 @@ public:
 
     // Send messages to nodes
     bool sendHIDOutput(uint8_t node_id, uint8_t device_id, const uint8_t* report, uint8_t len);
-    bool sendSerialData(uint8_t node_id, const uint8_t* data, uint8_t len);
+    bool sendSerialData(uint8_t node_id, uint8_t port_id, const uint8_t* data, uint8_t len);
     bool sendMCDUDisplay(uint8_t node_id, const uint8_t* data, uint8_t len);
 
     // Register callbacks
     void setHIDInputCallback(HIDInputCallback callback);
     void setSerialDataCallback(SerialDataCallback callback);
     void setNodeStatusCallback(NodeStatusCallback callback);
+    void setTestMessageCallback(TestMessageCallback callback);
 
     // Status
     CoordinatorState getState() const { return _state; }
     uint8_t getConnectedNodeCount() const;
     const PeerInfo* getPeerInfo(uint8_t node_id) const;
 
-    // Static callbacks for ESP-NOW
-    // Note: Using older ESP-NOW API signature for Arduino ESP32 Core compatibility
-    static void onDataSent(const uint8_t* mac_addr, esp_now_send_status_t status);
-    static void onDataReceived(const uint8_t* mac_addr, const uint8_t* data, int len);
+    // Static callbacks for ESP-NOW (Arduino core signature)
+    static void onDataSent(const wifi_tx_info_t* info, esp_now_send_status_t status);
+    static void onDataReceived(const esp_now_recv_info_t* info, const uint8_t* data, int len);
 
 private:
     CoordinatorState _state;
@@ -86,6 +93,7 @@ private:
     HIDInputCallback _hid_input_callback;
     SerialDataCallback _serial_data_callback;
     NodeStatusCallback _node_status_callback;
+    TestMessageCallback _test_callback;
 
     // Internal methods
     void processDiscovery();
@@ -99,6 +107,8 @@ private:
     void handleHIDInput(const uint8_t* mac, const HIDInputPayload* payload);
     void handleSerialData(const uint8_t* mac, const SerialDataPayload* payload);
     void handleMCDUInput(const uint8_t* mac, const MCDUInputPayload* payload);
+    void handleTestMessage(const uint8_t* mac, uint8_t msg_type,
+                           const uint8_t* payload, size_t payload_len);
 
     bool sendMessage(const uint8_t* mac, const uint8_t* data, size_t len);
     void broadcastDiscovery();
@@ -107,7 +117,7 @@ private:
 
     PeerInfo* findPeerByMac(const uint8_t* mac);
     PeerInfo* findPeerById(uint8_t node_id);
-    uint8_t assignNodeId();
+    uint8_t assignNodeId(uint8_t node_type, uint8_t capabilities);
 };
 
 // Global coordinator instance

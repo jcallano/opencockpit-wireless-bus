@@ -12,6 +12,12 @@
 #include <WiFi.h>
 #include <esp_wifi.h>
 #include <esp_now.h>
+#include <esp_mac.h>
+
+// Logger for ESP-NOW init/config messages
+#ifndef ESPNOW_LOG_SERIAL
+#define ESPNOW_LOG_SERIAL Serial
+#endif
 
 // WiFi Channel (fixed to prevent scanning delays)
 #define ESPNOW_WIFI_CHANNEL 1
@@ -52,36 +58,47 @@ static const uint8_t BROADCAST_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 inline bool initEspNowOptimized() {
     // 1. Force Dual Mode to keep radio alive
     WiFi.mode(WIFI_AP_STA);
+    delay(10);
 
-    // 2. CRITICAL: Ban 802.11b to prevent 1Mbps negotiation
+    // 2. CRITICAL: Ban 802.11b to prevent 1Mbps negotiation (BEFORE WiFi start)
     // Forces OFDM modulation (6Mbps minimum)
-    esp_err_t err = esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-    if (err != ESP_OK) {
-        Serial.printf("Failed to set STA protocol: %d\n", err);
-        return false;
+    // NOTE: Some ESP-IDF versions require WiFi started first, others before.
+    //       We try both approaches and suppress errors as ESP-NOW works regardless.
+    esp_err_t err = esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    err = esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+
+    // 3. Ensure WiFi is started (some targets require explicit start)
+    err = esp_wifi_start();
+    if (err != ESP_OK && err != ESP_ERR_WIFI_NOT_INIT && err != ESP_ERR_WIFI_NOT_STARTED) {
+        ESPNOW_LOG_SERIAL.printf("Failed to start WiFi: %d\n", err);
     }
 
-    err = esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
-    if (err != ESP_OK) {
-        Serial.printf("Failed to set AP protocol: %d\n", err);
-        return false;
-    }
+    // 4. Try setting protocol again after start (fallback for different ESP-IDF versions)
+    esp_wifi_set_protocol(WIFI_IF_STA, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
+    esp_wifi_set_protocol(WIFI_IF_AP, WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N);
 
-    // 3. Force Channel 1 (prevent scanning)
+    // 5. Force Channel 1 (prevent scanning)
     // Must use promiscuous mode briefly to set channel
     esp_wifi_set_promiscuous(true);
     esp_wifi_set_channel(ESPNOW_WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE);
     esp_wifi_set_promiscuous(false);
 
-    // 4. Brute Force Power - NO SLEEP
+    // 6. Brute Force Power - NO SLEEP
     WiFi.setSleep(false);
     esp_wifi_set_ps(WIFI_PS_NONE);
 
-    // 5. Initialize ESP-NOW
+    // 7. Initialize ESP-NOW
     err = esp_now_init();
     if (err != ESP_OK) {
-        Serial.printf("ESP-NOW init failed: %d\n", err);
-        return false;
+        // Retry once with STA-only to recover from WiFi init issues
+        WiFi.mode(WIFI_STA);
+        delay(10);
+        esp_wifi_start();
+        err = esp_now_init();
+        if (err != ESP_OK) {
+            ESPNOW_LOG_SERIAL.printf("ESP-NOW init failed: %d\n", err);
+            return false;
+        }
     }
 
     return true;
@@ -109,7 +126,7 @@ inline bool addEspNowPeer(const uint8_t* mac_address, uint8_t channel = ESPNOW_W
 
     esp_err_t err = esp_now_add_peer(&peer_info);
     if (err != ESP_OK) {
-        Serial.printf("Failed to add peer: %d\n", err);
+        ESPNOW_LOG_SERIAL.printf("Failed to add peer: %d\n", err);
         return false;
     }
 
