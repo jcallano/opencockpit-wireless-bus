@@ -152,6 +152,10 @@ MIT License - See [LICENSE](LICENSE) for details.
 
 @jcallano
 
+## Acknowledgments
+
+* **Antigravity Framework** - *AI Agentic Assistance*
+
 ## Version History
 
 | Version | Date | Changes |
