@@ -56,3 +56,4 @@ credentials.json
 secrets.json
 *.pem
 *.key
+tools/bin/

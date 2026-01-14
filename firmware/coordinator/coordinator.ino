@@ -51,47 +51,14 @@ static void espnow_task(void* parameter);
 static void log_uart_status();
 static bool slip_send_frame(const uint8_t* data, size_t len);
 
+#define BOARD_ESPRESSIF_USB_OTG
+#include "../common/hardware_config.h"
+
 // ------------------------------------------------------------
-// ESP32-S3-USB-OTG board pins (from Espressif reference)
+// Board Pins (Defined in hardware_config.h)
 // ------------------------------------------------------------
-#define USB_SEL_PIN         18  // USB_SEL: HIGH=USB_HOST, LOW=USB_DEV (default)
-#define USB_D_MINUS_PIN     19
-#define USB_D_PLUS_PIN      20
-
-#define LIMIT_EN_PIN        17  // LIMIT_EN: high enables current limit IC
-#define DEV_VBUS_EN_PIN     12  // DEV_VBUS_EN: high enables DEV_VBUS supply
-#define BOOST_EN_PIN        13  // BOOST_EN: high enables boost circuit
-
-#define LCD_RST_PIN         8   // LCD_RET (active low)
-#define LCD_EN_PIN          5   // LCD_EN (active low, used as CS)
-#define LCD_DC_PIN          4   // LCD_DC: data/command select
-#define LCD_SCLK_PIN        6   // LCD_SCLK: SPI clock
-#define LCD_MOSI_PIN        7   // LCD_SDA: SPI MOSI
-#define LCD_BL_PIN          9   // LCD_BL: backlight control
-
-// Buttons (active low)
-#define BTN_OK_PIN          0   // BUTTON_OK
-#define BTN_DW_PIN          11  // BUTTON_DW
-#define BTN_UP_PIN          10  // BUTTON_UP
-#define BTN_MENU_PIN        14  // BUTTON_MENU
-
-// LEDs (active high)
-#define LED_GREEN_PIN       15  // LED_GREEN
-#define LED_YELLOW_PIN      16  // LED_YELLOW
-
-// ADC monitoring
-#define HOST_VOL_PIN        1   // HOST_VOL (ADC1 CH0)
-#define BAT_VOL_PIN         2   // BAT_VOL (ADC1 CH1)
-
-// Over-current indicator
-#define OVER_CURRENT_PIN    21  // OVER_CURRENT: high means overrun
-
-// SD pins (shared with SDIO/SPI)
-#define SD_SCK_PIN          36  // SD_SCK / SDIO CLK
-#define SD_DO_PIN           37  // SD_DO / SDIO D0
-#define SD_D1_PIN           38  // SDIO D1
-#define SD_D2_PIN           33  // SDIO D2
-#define SD_D3_PIN           34  // SD_D3 / SDIO D3 (SPI CS)
+// Using BOARD_ESPRESSIF_USB_OTG definitions
+// LCD pins, Buttons, LEDs are now macros.
 
 // ------------------------------------------------------------
 // LCD parameters (ST7789, 240x240)
@@ -112,7 +79,7 @@ static SPISettings lcd_spi_settings(10000000, MSBFIRST, SPI_MODE0);
 // SLIP transport
 // ------------------------------------------------------------
 #if SLIP_USE_CDC
-static Stream& slipSerial = USBSerial;
+static Stream& slipSerial = Serial;
 #else
 static Stream& slipSerial = Serial0;
 #endif
@@ -185,20 +152,21 @@ static const uint8_t kFont5x7[] = {
 // LCD helpers
 // ------------------------------------------------------------
 static void lcd_write_cmd(uint8_t cmd) {
-    digitalWrite(LCD_DC_PIN, LOW);
+    digitalWrite(PIN_LCD_BL, LOW); // Added this line as per instruction
+    digitalWrite(PIN_LCD_DC, LOW);
     lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(LCD_EN_PIN, LOW);
+    digitalWrite(PIN_LCD_EN, LOW);
     lcd_spi.write(cmd);
-    digitalWrite(LCD_EN_PIN, HIGH);
+    digitalWrite(PIN_LCD_EN, HIGH);
     lcd_spi.endTransaction();
 }
 
 static void lcd_write_data(const uint8_t* data, size_t len) {
-    digitalWrite(LCD_DC_PIN, HIGH);
+    digitalWrite(PIN_LCD_DC, HIGH);
     lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(LCD_EN_PIN, LOW);
+    digitalWrite(PIN_LCD_EN, LOW);
     lcd_spi.writeBytes(data, len);
-    digitalWrite(LCD_EN_PIN, HIGH);
+    digitalWrite(PIN_LCD_EN, HIGH);
     lcd_spi.endTransaction();
 }
 
@@ -227,13 +195,13 @@ static void lcd_fill_rect(uint16_t x, uint16_t y, uint16_t w, uint16_t h, uint16
     if (y + h > LCD_HEIGHT) h = LCD_HEIGHT - y;
 
     lcd_set_window(x, y, x + w - 1, y + h - 1);
-    digitalWrite(LCD_DC_PIN, HIGH);
+    digitalWrite(PIN_LCD_DC, HIGH);
     lcd_spi.beginTransaction(lcd_spi_settings);
-    digitalWrite(LCD_EN_PIN, LOW);
+    digitalWrite(PIN_LCD_EN, LOW);
     for (uint32_t i = 0; i < static_cast<uint32_t>(w) * h; i++) {
         lcd_spi.write16(color);
     }
-    digitalWrite(LCD_EN_PIN, HIGH);
+    digitalWrite(PIN_LCD_EN, HIGH);
     lcd_spi.endTransaction();
 }
 
@@ -290,20 +258,15 @@ static void lcd_update_line(uint8_t index, const char* text, uint16_t color) {
 }
 
 static void lcd_init() {
-    pinMode(LCD_RST_PIN, OUTPUT);
-    pinMode(LCD_EN_PIN, OUTPUT);
-    pinMode(LCD_DC_PIN, OUTPUT);
-    pinMode(LCD_BL_PIN, OUTPUT);
+    setupHardware();
 
-    digitalWrite(LCD_EN_PIN, HIGH);
-    digitalWrite(LCD_BL_PIN, HIGH);
+    lcd_spi.begin(PIN_LCD_CLK, -1, PIN_LCD_MOSI, -1);
 
-    lcd_spi.begin(LCD_SCLK_PIN, -1, LCD_MOSI_PIN, LCD_EN_PIN);
-
-    digitalWrite(LCD_RST_PIN, LOW);
-    delay(20);
-    digitalWrite(LCD_RST_PIN, HIGH);
-    delay(120);
+    // Reset LCD
+    digitalWrite(PIN_LCD_RST, LOW);
+    delay(100);
+    digitalWrite(PIN_LCD_RST, HIGH);
+    delay(100);
 
     lcd_write_cmd(0x01); // SWRESET
     delay(150);
@@ -551,22 +514,14 @@ void setup() {
     USB.serialNumber("OC-A-001");
     USB.begin();
   #endif
-    USBSerial.begin(115200);
-    USBSerial.setRxBufferSize(4096);
-    USBSerial.setTxTimeoutMs(50);
-    USBSerial.enableReboot(false);
+    Serial.begin(115200);
+    Serial.setRxBufferSize(4096);
+    Serial.setTxTimeoutMs(50);
+    Serial.enableReboot(false);
     Serial0.begin(115200);
     delay(500);
 
-    pinMode(USB_SEL_PIN, OUTPUT);
-    digitalWrite(USB_SEL_PIN, LOW); // USB_DEV to PC (per USB-OTG board routing)
-
-    pinMode(DEV_VBUS_EN_PIN, OUTPUT);
-    pinMode(BOOST_EN_PIN, OUTPUT);
-    pinMode(LIMIT_EN_PIN, OUTPUT);
-    digitalWrite(DEV_VBUS_EN_PIN, LOW);
-    digitalWrite(BOOST_EN_PIN, LOW);
-    digitalWrite(LIMIT_EN_PIN, LOW);
+    setupHardware();
 
     slip_decoder_init(&slip_decoder);
 
@@ -738,7 +693,7 @@ static bool slip_send_frame(const uint8_t* data, size_t len) {
     }
 
     slip_encode(data, len, encoded);
-    size_t written = USBSerial.write(encoded, encoded_len);
+    size_t written = Serial.write(encoded, encoded_len);
     return written == encoded_len;
 #else
     slip_send(data, len, slipSerial);

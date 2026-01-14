@@ -16,19 +16,23 @@
 
 #define ESPNOW_LOG_SERIAL Serial0
 
+#define BOARD_WEACT_STUDIO_S3
+#include "../../common/hardware_config.h"
 #include "../../common/espnow_config.h"
 #include "../../common/protocol.h"
 
 // -----------------------------
-// Board/Console Configuration (WeAct ESP32-S3 DevKit Rev A)
+// Board/Console Configuration
 // -----------------------------
-#define UART0_TX_PIN        43
-#define UART0_RX_PIN        44
+// UART0 pins should be defined by board variant or defaults
+#ifndef UART0_TX_PIN
+  #define UART0_TX_PIN 43
+#endif
+#ifndef UART0_RX_PIN
+  #define UART0_RX_PIN 44
+#endif
 
-// USB Host power/routing (ESP32-S3-USB-OTG board)
-#define USB_SEL_PIN         18  // HIGH = USB_HOST
-#define DEV_VBUS_EN_PIN     12  // High enables DEV_VBUS supply
-#define VBUS_EN_OTG_PIN     17  // High enables current limit/OTG power
+// USB definitions are now in hardware_config.h
 
 #define LOG_SERIAL          Serial0
 #define LOG_SERIAL_BEGIN()  Serial0.begin(115200, SERIAL_8N1, UART0_RX_PIN, UART0_TX_PIN)
@@ -835,12 +839,8 @@ void setup() {
     LOG_SERIAL_BEGIN();
     LOG_SERIAL.println("\n=== Node B: Sidestick + MCDU ===");
 
-    pinMode(USB_SEL_PIN, OUTPUT);
-    digitalWrite(USB_SEL_PIN, HIGH); // Route D+/D- to USB_HOST
-    pinMode(DEV_VBUS_EN_PIN, OUTPUT);
-    digitalWrite(DEV_VBUS_EN_PIN, HIGH);
-    pinMode(VBUS_EN_OTG_PIN, OUTPUT);
-    digitalWrite(VBUS_EN_OTG_PIN, HIGH);
+    setupHardware();
+    enableUsbHostPower(true);
     delay(500);
 
     g_rx_queue = xQueueCreate(16, sizeof(RxPacket));

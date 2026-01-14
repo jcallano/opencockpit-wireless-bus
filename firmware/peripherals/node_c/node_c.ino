@@ -16,14 +16,20 @@
 
 #define ESPNOW_LOG_SERIAL Serial0
 
+#define BOARD_WEACT_STUDIO_S3
+#include "../../common/hardware_config.h"
 #include "../../common/espnow_config.h"
 #include "../../common/protocol.h"
 
 // -----------------------------
-// Board/Console Configuration (WeAct ESP32-S3 DevKit Rev A)
+// Board/Console Configuration
 // -----------------------------
-#define UART0_TX_PIN        43
-#define UART0_RX_PIN        44
+#ifndef UART0_TX_PIN
+  #define UART0_TX_PIN 43
+#endif
+#ifndef UART0_RX_PIN
+  #define UART0_RX_PIN 44
+#endif
 
 #define LOG_SERIAL          Serial0
 #define LOG_SERIAL_BEGIN()  Serial0.begin(115200, SERIAL_8N1, UART0_RX_PIN, UART0_TX_PIN)
@@ -795,6 +801,9 @@ void setup() {
     LOG_SERIAL_BEGIN();
     delay(500);
     LOG_SERIAL.println("\n=== Node C: Quadrant + MiniFCU ===");
+    
+    setupHardware();
+    enableUsbHostPower(true);
 
     g_rx_queue = xQueueCreate(16, sizeof(RxPacket));
 
