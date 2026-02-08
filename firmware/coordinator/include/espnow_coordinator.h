@@ -58,6 +58,9 @@ public:
     bool sendHIDOutput(uint8_t node_id, uint8_t device_id, const uint8_t* report, uint8_t len);
     bool sendSerialData(uint8_t node_id, uint8_t port_id, const uint8_t* data, uint8_t len);
     bool sendMCDUDisplay(uint8_t node_id, const uint8_t* data, uint8_t len);
+    
+    // Trigger discovery manually
+    void broadcastDiscovery();
 
     // Register callbacks
     void setHIDInputCallback(HIDInputCallback callback);
@@ -78,6 +81,7 @@ private:
     CoordinatorState _state;
     PeerInfo _peers[MAX_PEERS];
     uint8_t _peer_count;
+    uint8_t _connected_count;
     uint8_t _my_mac[6];
 
     // FreeRTOS primitives
@@ -111,7 +115,6 @@ private:
                            const uint8_t* payload, size_t payload_len);
 
     bool sendMessage(const uint8_t* mac, const uint8_t* data, size_t len);
-    void broadcastDiscovery();
     void sendRegistration(const uint8_t* mac, uint8_t assigned_id);
     void sendHeartbeatToNode(uint8_t node_id);
 

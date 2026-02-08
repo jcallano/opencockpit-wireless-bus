@@ -10,8 +10,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include "USB.h"
-#include "USBCDC.h"
-USBCDC SlipCDC;
+// #include "USBCDC.h" // Removed for CDC_ON_BOOT=1
 
 struct NullSerial {
     template <typename... Args>
@@ -90,7 +89,7 @@ Adafruit_ST7789 tft = Adafruit_ST7789(&SPI, PIN_LCD_CS, PIN_LCD_DC, PIN_LCD_RST)
 // SLIP transport
 // ------------------------------------------------------------
 #if SLIP_USE_CDC
-static Stream& slipSerial = Serial;
+static Stream& slipSerial = Serial; // Serial is now USB CDC
 #else
 static Stream& slipSerial = Serial0;
 #endif
@@ -265,11 +264,15 @@ static void handle_slip_frame(const uint8_t* data, size_t len) {
             break;
         }
         case MSG_DISCOVERY_REQ: {
+            // Found bug: Request was ignored. Force immediately.
+            coordinator.broadcastDiscovery(); 
+            /*
             for (uint8_t id = NODE_B_JOYSTICK; id < NODE_BROADCAST; id++) {
                 const PeerInfo* peer = coordinator.getPeerInfo(id);
                 if (!peer) continue;
                 // Currently discovery is broadcast, can implement directed discovery here
             }
+            */
             break;
         }
         default: break;
@@ -344,7 +347,14 @@ static void onTestMessage(uint8_t msg_type, uint8_t node_id,
         g_last_rtt_ms = millis() - g_test_last_send_ms;
         g_latency_sum_ms += g_last_rtt_ms;
         g_latency_samples++;
-        
+
+        // Compute jitter as max |rtt - running_avg|
+        if (g_latency_samples > 1) {
+            uint32_t avg = g_latency_sum_ms / g_latency_samples;
+            uint32_t delta = (g_last_rtt_ms > avg) ? (g_last_rtt_ms - avg) : (avg - g_last_rtt_ms);
+            if (delta > g_jitter_max_ms) g_jitter_max_ms = delta;
+        }
+
         static uint32_t last_log = 0;
         if (millis() - last_log > 1000) {
             ESPNOW_LOG_SERIAL.printf("TEST: RTT=%u ms\n", g_last_rtt_ms);
@@ -360,15 +370,15 @@ static void onTestMessage(uint8_t msg_type, uint8_t node_id,
 // Setup & Loop
 // ------------------------------------------------------------
 void setup() {
-    // 1. Init Serial (Debug on UART0)
-    Serial.begin(115200);
-    // 2. Init USB (CDC for SLIP)
-#if SLIP_USE_CDC
-    USB.manufacturerName("OpenCockpit");
-    USB.serialNumber("OC-A-001");
-    USB.begin();
-    SlipCDC.begin();
-#endif
+    // 1. Init Serial (USB CDC for SLIP)
+    Serial.begin(115200); 
+    
+    // 2. Init Serial0 (Debug on UART0)
+    Serial0.begin(115200);
+    // Note: Serial0 pins are default for the board (usually 43/44 on S3 DevKit)
+
+    
+    // Init SLIP Decoder
     
     // Init SLIP Decoder
     slip_decoder_init(&slip_decoder);
@@ -441,6 +451,8 @@ void loop() {
         g_jitter_max_ms = 0;
         last_metric = millis();
     }
+    
+    
 }
 
 static void espnow_task(void* parameter) {
@@ -480,28 +492,20 @@ static void log_uart_status() {
 }
 
 static bool slip_send_frame(const uint8_t* data, size_t len) {
-#if SLIP_USE_CDC
-    // Use the dedicated SlipCDC object defined in main
-    extern USBCDC SlipCDC;
-
-    if (!SlipCDC) {
-        return false;
-    }
-
     size_t encoded_len = slip_encoded_size(data, len);
     static uint8_t encoded[SLIP_MAX_FRAME_SIZE * 2 + 2];
     if (encoded_len > sizeof(encoded)) {
+        ESPNOW_LOG_SERIAL.println("SLIP TX FAIL: Too large");
         return false;
     }
-    if (SlipCDC.availableForWrite() < static_cast<int>(encoded_len)) {
+    
+    // Check write availability
+    if (slipSerial.availableForWrite() < static_cast<int>(encoded_len)) {
+        // ESPNOW_LOG_SERIAL.println("SLIP TX FAIL: Buffer Full"); // Reduce noise
         return false;
     }
 
     slip_encode(data, len, encoded);
-    size_t written = SlipCDC.write(encoded, encoded_len);
+    size_t written = slipSerial.write(encoded, encoded_len);
     return written == encoded_len;
-#else
-    slip_send(data, len, slipSerial);
-    return true;
-#endif
 }

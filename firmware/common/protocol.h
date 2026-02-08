@@ -37,36 +37,7 @@ enum MessageType : uint8_t {
 
 // ... [Node Enums] ...
 
-// Packed Sidestick Payload (Optimized for TCA Sidestick)
-// Total size: 8 bytes
-struct PackedSidestickPayload {
-    // Axes (12-bit X/Y, 10-bit Twist/Throttle)
-    uint16_t axis_x : 12;       // 0-4095
-    uint16_t axis_y : 12;       // 0-4095
-    uint16_t axis_z : 10;       // Twist 0-1023
-    uint16_t axis_slider : 10;  // Throttle 0-1023
-    
-    // Buttons & Hat
-    uint32_t buttons : 16;      // 16 buttons
-    uint32_t hat_switch : 4;    // 8-way POV
-};
-
-// Packed Quadrant Payload (Optimized for TCA Quadrant + Addons)
-// Total size: 16 bytes
-struct PackedQuadrantPayload {
-    // Main Throttles (12-bit)
-    uint16_t throttle_left : 12;
-    uint16_t throttle_right : 12;
-    
-    // Addon Axes (Speedbrake, Flaps, etc - 10-bit)
-    uint16_t axis_3 : 10;
-    uint16_t axis_4 : 10;
-    uint16_t axis_5 : 10;
-    uint16_t axis_6 : 10;
-    
-    // Buttons (64 buttons to cover main unit + addons)
-    uint64_t buttons;
-};
+// Packed payloads moved to packed section below
 
 // Heartbeat payload
 struct HeartbeatPayload {
@@ -79,6 +50,7 @@ enum NodeId : uint8_t {
     NODE_COORDINATOR = 0x00,
     NODE_B_JOYSTICK  = 0x01,
     NODE_C_QUADRANT  = 0x02,
+    NODE_D_THROTTLE  = 0x03,
     NODE_BROADCAST   = 0xFF
 };
 
@@ -105,7 +77,8 @@ enum DeviceId : uint8_t {
     DEV_TCA_QUADRANT    = 0x02,
     DEV_WINWING_MCDU    = 0x03,
     DEV_MINIFCU         = 0x04,
-    DEV_MINIEFIS        = 0x05
+    DEV_MINIEFIS        = 0x05,
+    DEV_URSA_MINOR      = 0x06
 };
 
 // Maximum payload size (ESP-NOW limit is 250 bytes)
@@ -195,13 +168,41 @@ struct MCDUInputPayload {
     uint8_t button_state;           // 0=released, 1=pressed
 };
 
-// Error Message payload
 struct ErrorPayload {
     uint8_t error_code;
     uint8_t error_data[4];
 };
 
+// Packed Sidestick Payload (Optimized for TCA Sidestick)
+// Total size: 8 bytes
+struct PackedSidestickPayload {
+    // Axes (12-bit X/Y, 10-bit Twist/Throttle)
+    uint16_t axis_x : 12;       // 0-4095
+    uint16_t axis_y : 12;       // 0-4095
+    uint16_t axis_z : 10;       // Twist 0-1023
+    uint16_t axis_slider : 10;  // Throttle 0-1023
+    
+    // Buttons & Hat
+    uint32_t buttons : 16;      // 16 buttons
+    uint32_t hat_switch : 4;    // 8-way POV
+};
 
+// Packed Quadrant Payload (Optimized for TCA Quadrant + Addons)
+// Total size: 16 bytes
+struct PackedQuadrantPayload {
+    // Main Throttles (12-bit)
+    uint16_t throttle_left : 12;
+    uint16_t throttle_right : 12;
+    
+    // Addon Axes (Speedbrake, Flaps, etc - 10-bit)
+    uint16_t axis_3 : 10;
+    uint16_t axis_4 : 10;
+    uint16_t axis_5 : 10;
+    uint16_t axis_6 : 10;
+    
+    // Buttons (64 buttons to cover main unit + addons)
+    uint64_t buttons;
+};
 
 // Test message payload (echoed back by node)
 struct TestPayload {

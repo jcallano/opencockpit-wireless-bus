@@ -172,11 +172,17 @@ static const uint8_t kMcduBrightnessCmd[64] = {
 // Helpers
 // -----------------------------
 static void set_coordinator_mac(const uint8_t* mac) {
-    if (!g_have_coordinator || memcmp(g_coordinator_mac, mac, 6) != 0) {
-        memcpy(g_coordinator_mac, mac, 6);
-        g_have_coordinator = true;
-        addEspNowPeer(g_coordinator_mac);
+    if (g_have_coordinator) {
+        // Sticky MAC: Don't change coordinator once locked
+        return;
     }
+    memcpy(g_coordinator_mac, mac, 6);
+    g_have_coordinator = true;
+    addEspNowPeer(g_coordinator_mac);
+    
+    char mac_str[18];
+    macToString(g_coordinator_mac, mac_str);
+    LOG_SERIAL.printf("Locked to Coordinator: %s\n", mac_str);
 }
 
 static void send_message_to_coord(const uint8_t* data, size_t len) {
@@ -905,6 +911,10 @@ void setup() {
     setupHardware();
     enableUsbHostPower(true);
     delay(500);
+
+    // Log reset reason to help diagnose crash loops
+    esp_reset_reason_t reason = esp_reset_reason();
+    LOG_SERIAL.printf("Boot Reason: %d\n", reason);
 
     g_rx_queue = xQueueCreate(16, sizeof(RxPacket));
 

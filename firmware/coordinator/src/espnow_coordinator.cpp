@@ -14,6 +14,7 @@ static ESPNowCoordinator* g_coordinator = nullptr;
 ESPNowCoordinator::ESPNowCoordinator()
     : _state(COORD_STATE_INIT)
     , _peer_count(0)
+    , _connected_count(0)
     , _tx_queue(nullptr)
     , _rx_queue(nullptr)
     , _peer_mutex(nullptr)
@@ -136,6 +137,7 @@ void ESPNowCoordinator::processHeartbeats() {
             if (now - _peers[i].last_heartbeat_ms > HEARTBEAT_TIMEOUT_MS) {
                 ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d lost\n", _peers[i].node_id);
                 _peers[i].connected = false;
+                if (_connected_count > 0) _connected_count--;
                 if (_node_status_callback) {
                     _node_status_callback(_peers[i].node_id, false);
                 }
@@ -175,12 +177,10 @@ void ESPNowCoordinator::processRxQueue() {
                 break;
 
             case MSG_HEARTBEAT:
+            case MSG_HEARTBEAT_ACK: // Treat ACK as proof of life too
                 if (payload_len >= sizeof(HeartbeatPayload)) {
                     handleHeartbeat(msg.mac_address, (const HeartbeatPayload*)payload);
                 }
-                break;
-            case MSG_HEARTBEAT_ACK:
-                // Heartbeat ACK from nodes; no action required
                 break;
 
             case MSG_HID_INPUT:
@@ -270,13 +270,16 @@ void ESPNowCoordinator::handleDiscoveryResponse(const uint8_t* mac, const Discov
         _peer_count++;
     }
 
+    bool needs_registration = !peer->registered;
     xSemaphoreGive(_peer_mutex);
 
     // Add as ESP-NOW peer
     addEspNowPeer(mac);
 
-    // Send registration
-    sendRegistration(mac, peer->node_id);
+    // Only send registration to new (unregistered) peers
+    if (needs_registration) {
+        sendRegistration(mac, peer->node_id);
+    }
 }
 
 void ESPNowCoordinator::handleRegisterAck(const uint8_t* mac, uint8_t node_id) {
@@ -284,9 +287,17 @@ void ESPNowCoordinator::handleRegisterAck(const uint8_t* mac, uint8_t node_id) {
 
     PeerInfo* peer = findPeerByMac(mac);
     if (peer) {
+        if (peer->registered && peer->connected) {
+             // Already registered, just update timestamp to avoid churn
+             peer->last_heartbeat_ms = millis();
+             xSemaphoreGive(_peer_mutex);
+             return;
+        }
+
         peer->registered = true;
         peer->connected = true;
         peer->last_heartbeat_ms = millis();
+        _connected_count++;
         ESPNOW_LOG_SERIAL.printf("Coordinator: Register ACK from %02X (peer id %02X)\n",
                        node_id, peer->node_id);
         ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d registered: %s\n", peer->node_id, peer->node_name);
@@ -308,6 +319,7 @@ void ESPNowCoordinator::handleHeartbeat(const uint8_t* mac, const HeartbeatPaylo
 
         if (!peer->connected) {
             peer->connected = true;
+            _connected_count++;
             ESPNOW_LOG_SERIAL.printf("Coordinator: Node %d reconnected\n", peer->node_id);
             if (_node_status_callback) {
                 _node_status_callback(peer->node_id, true);
@@ -448,13 +460,7 @@ void ESPNowCoordinator::setTestMessageCallback(TestMessageCallback callback) {
 }
 
 uint8_t ESPNowCoordinator::getConnectedNodeCount() const {
-    uint8_t count = 0;
-    for (int i = 0; i < MAX_PEERS; i++) {
-        if (_peers[i].registered && _peers[i].connected) {
-            count++;
-        }
-    }
-    return count;
+    return _connected_count;
 }
 
 void ESPNowCoordinator::handleTestMessage(const uint8_t* mac, uint8_t msg_type,
@@ -555,7 +561,10 @@ uint8_t ESPNowCoordinator::assignNodeId(uint8_t node_type, uint8_t capabilities)
     };
 
     uint8_t preferred = NODE_BROADCAST;
-    if ((capabilities & CAP_SERIAL) && !(capabilities & CAP_DISPLAY)) {
+    if ((capabilities & CAP_HID_OUTPUT) && (capabilities & CAP_DISPLAY)) {
+        // Bidirectional HID with display (e.g. Ursa Minor throttle)
+        preferred = NODE_D_THROTTLE;
+    } else if ((capabilities & CAP_SERIAL) && !(capabilities & CAP_DISPLAY)) {
         preferred = NODE_C_QUADRANT;
     } else if (capabilities & CAP_DISPLAY) {
         preferred = NODE_B_JOYSTICK;

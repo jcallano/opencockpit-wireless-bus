@@ -23,9 +23,10 @@
 #define ESPNOW_WIFI_CHANNEL 1
 
 // Heartbeat configuration
-#define HEARTBEAT_INTERVAL_MS 1000
-#define HEARTBEAT_TIMEOUT_MS 3000
-#define MAX_MISSED_HEARTBEATS 3
+// Heartbeat configuration
+#define HEARTBEAT_INTERVAL_MS 500
+#define HEARTBEAT_TIMEOUT_MS 6000
+#define MAX_MISSED_HEARTBEATS 12
 
 // Discovery configuration
 #define DISCOVERY_INTERVAL_MS 500
