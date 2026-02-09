@@ -43,6 +43,7 @@ This project creates a wireless bridge between various flight simulator hardware
 | Thrustmaster TCA Sidestick | Joystick | Documented |
 | Thrustmaster TCA Quadrant | Throttle | Documented |
 | WinWing MCDU | CDU Display | Documented |
+| WinWing Ursa Minor + Pac 32 | Throttle/LCD | Documented |
 
 ### Board Compatibility
 - **Coordinator (Node A):** [Espressif ESP32-S3-USB-OTG](https://docs.espressif.com/projects/esp-iot-solution/en/latest/hw-reference/ESP32-S3-USB-OTG.html) (Recommended for LCD/Power control)
