@@ -271,14 +271,19 @@ void ESPNowCoordinator::handleDiscoveryResponse(const uint8_t* mac, const Discov
     }
 
     bool needs_registration = !peer->registered;
+    bool already_connected = peer->registered && peer->connected;
+    uint8_t node_id = peer->node_id;
     xSemaphoreGive(_peer_mutex);
 
     // Add as ESP-NOW peer
     addEspNowPeer(mac);
 
-    // Only send registration to new (unregistered) peers
     if (needs_registration) {
-        sendRegistration(mac, peer->node_id);
+        // New peer: send registration
+        sendRegistration(mac, node_id);
+    } else if (already_connected && _node_status_callback) {
+        // Already registered & connected: notify PC so DISC commands get a response
+        _node_status_callback(node_id, true);
     }
 }
 

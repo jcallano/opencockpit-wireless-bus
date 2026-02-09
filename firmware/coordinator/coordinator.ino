@@ -498,14 +498,19 @@ static bool slip_send_frame(const uint8_t* data, size_t len) {
         ESPNOW_LOG_SERIAL.println("SLIP TX FAIL: Too large");
         return false;
     }
-    
-    // Check write availability
-    if (slipSerial.availableForWrite() < static_cast<int>(encoded_len)) {
-        // ESPNOW_LOG_SERIAL.println("SLIP TX FAIL: Buffer Full"); // Reduce noise
-        return false;
-    }
 
     slip_encode(data, len, encoded);
+
+    // Write with brief retry instead of silent drop
+    for (int attempt = 0; attempt < 3; attempt++) {
+        if (slipSerial.availableForWrite() >= static_cast<int>(encoded_len)) {
+            size_t written = slipSerial.write(encoded, encoded_len);
+            return written == encoded_len;
+        }
+        delayMicroseconds(500);  // 0.5ms wait between retries
+    }
+
+    // Last resort: write anyway (may block briefly but won't lose data)
     size_t written = slipSerial.write(encoded, encoded_len);
     return written == encoded_len;
 }
