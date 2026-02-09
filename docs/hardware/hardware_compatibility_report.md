@@ -4,6 +4,7 @@
 The current codebase assumes a uniform hardware platform (Espressif ESP32-S3 USB OTG Development Board) for all nodes. However, your actual deployment uses mixed hardware:
 *   **Coordinator (Node A):** Espressif ESP32-S3 USB OTG (8MB PSRAM, No Ext Flash).
 *   **Peripheral Nodes (B & C):** WeAct Studio ESP32-S3 (8MB PSRAM, 8MB OPI Flash).
+*   **Peripheral Node D:** WeAct Studio ESP32-S3 (Ursa Minor + Pac 32 Controller).
 
 These boards have fundamentally different layouts, pinouts, and power management circuits.
 

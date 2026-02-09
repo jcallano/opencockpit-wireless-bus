@@ -108,7 +108,7 @@ python bridge/main.py
 - [MiniFCU Protocol](docs/protocols/minifcu/protocol.md) - FCU serial protocol
 - [Thrustmaster HID](docs/protocols/thrustmaster/) - Sidestick and Quadrant reports
 - [WinWing MCDU](docs/protocols/winwing_mcdu/protocol.md) - MCDU USB protocol
-- [WinWing Ursa Minor](docs/protocols/ursa_minor/protocol.md) - Throttle & LCD protocol
+- [WinWing Ursa Minor + Pac 32](docs/protocols/ursa_minor/protocol.md) - Throttle & LCD protocol
 - [ESP-NOW Optimization](docs/protocols/espnow/latency_optimization.md) - Latency tuning
 - [**Project Status**](docs/project_status.md) - Current executive summary
 
