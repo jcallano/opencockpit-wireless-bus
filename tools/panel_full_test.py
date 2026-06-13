@@ -1,7 +1,7 @@
 # ==============================================================
 # Herramienta de Diagnostico Interactiva Rowsfire B107
 # Desarrollada por: @jcallano
-# Fecha: 13 de Junio de 2026
+# Fecha: 13 de Junio de 2026 Ver 1.1 RAW MONITOR ADDED.
 # Con mucho amor para la comunidad simmer
 # ==============================================================
 
@@ -670,6 +670,40 @@ def show_switches_final_summary(detected_positions):
     input("\nPresiona Enter para regresar al menu principal...")
 
 
+# --- MONITOR DE EVENTOS SERIE RAW (DEPURACION) ---
+def test_raw_serial(ser):
+    clear_screen()
+    print_header()
+    print("\n--- MONITOR DE EVENTOS SERIE RAW (DEPURACION) ---")
+    print("Mueve cualquier control en el panel. Veras la trama exacta que envia.")
+    print("Esto es util para detectar si un switch fisico esta fallando o no envia datos.")
+    print("Presiona ENTER en tu teclado para regresar al menu.")
+    print("--------------------------------------------------------------")
+    
+    # Consumir datos viejos
+    ser.reset_input_buffer()
+    
+    while True:
+        if msvcrt_available:
+            if msvcrt.kbhit():
+                key = msvcrt.getch()
+                if key in [b'\r', b'\n']:
+                    break
+        else:
+            input("\nPresiona Enter para salir...")
+            break
+            
+        if ser.in_waiting > 0:
+            try:
+                line = ser.readline().decode('ascii', errors='ignore').strip()
+                if line:
+                    print(f"  [RAW] {line}")
+            except Exception as e:
+                print(f"[ERROR] {e}")
+                break
+        time.sleep(0.01)
+
+
 # --- MENU PRINCIPAL ---
 def main():
     global HW_PORT
@@ -738,6 +772,7 @@ def main():
                         print("3. Test de LEDs por Grupos de Color (Ambar / Azul / Verde)")
                         print("4. Test de Retroiluminacion (Backlight del panel)")
                         print("5. Test de Interruptores e Ingesta de Eventos (Switches)")
+                        print("6. Monitor de Eventos Serie RAW (Depuracion de Switches)")
                         print("0. Desconectar y salir al menu principal")
                         print("--------------------------------------------------------------")
                         
@@ -753,6 +788,8 @@ def main():
                             test_backlight(ser)
                         elif sub_choice == "5":
                             test_switches(ser, detected_positions)
+                        elif sub_choice == "6":
+                            test_raw_serial(ser)
                         elif sub_choice == "0":
                             print("\n[*] Cerrando conexion serie...")
                             break
